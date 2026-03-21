@@ -3,9 +3,23 @@
 local M = {}
 
 ---@class ReviewConfig
----@field view string  "unified" (default) — split view comes in Phase 2
 local defaults = {
   view = "unified",
+  colorblind = false,
+  keymaps = {
+    add_note = "a",
+    edit_note = "e",
+    delete_note = "d",
+    next_hunk = "]c",
+    prev_hunk = "[c",
+    next_file = "]f",
+    prev_file = "[f",
+    next_note = "]n",
+    prev_note = "[n",
+    toggle_split = "s",
+    notes_list = "N",
+    close = "q",
+  },
 }
 
 ---@type ReviewConfig
@@ -47,17 +61,8 @@ function M.open(args)
   local ref = nil
 
   if #args > 0 and args[1] == "pr" then
-    mode = "pr"
-    -- PR mode will be implemented in Phase 4
-    if #args > 1 then
-      -- :Review pr 123
-      vim.notify("PR mode coming soon. For now, use :Review [ref] for local diffs.", vim.log.levels.INFO)
-      return
-    else
-      -- :Review pr — auto-detect
-      vim.notify("PR mode coming soon. For now, use :Review [ref] for local diffs.", vim.log.levels.INFO)
-      return
-    end
+    vim.notify("PR mode coming soon. For now, use :Review [ref] for local diffs.", vim.log.levels.INFO)
+    return
   elseif #args > 0 then
     ref = args[1]
   end
@@ -147,7 +152,8 @@ function M.export(path)
       if note.end_line then
         line_ref = line_ref .. "-" .. tostring(note.end_line)
       end
-      table.insert(lines, string.format("**Line %s** (%s):", line_ref, note.side))
+      local kind = (note.note_type == "suggestion") and "suggestion" or "comment"
+      table.insert(lines, string.format("**Line %s** (%s, %s):", line_ref, note.side, kind))
       table.insert(lines, "")
       table.insert(lines, note.body)
       table.insert(lines, "")

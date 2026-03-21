@@ -56,6 +56,7 @@ local session = nil
 ---@field end_line number|nil
 ---@field side string  "old"|"new"
 ---@field body string
+---@field note_type string  "comment"|"suggestion"
 
 ---@class ReviewComment
 ---@field file_path string
@@ -105,15 +106,6 @@ end
 --- Destroy the current session.
 function M.destroy()
   session = nil
-end
-
---- Get the currently selected file.
----@return ReviewFile|nil
-function M.current_file()
-  if not session or #session.files == 0 then
-    return nil
-  end
-  return session.files[session.current_file_idx]
 end
 
 --- Set the current file index.
@@ -195,7 +187,7 @@ end
 ---@param body string
 ---@param end_line number|nil
 ---@param side string|nil  "old"|"new", defaults to "new"
-function M.add_note(file_path, line, body, end_line, side)
+function M.add_note(file_path, line, body, end_line, side, note_type)
   if not session then
     return
   end
@@ -205,6 +197,7 @@ function M.add_note(file_path, line, body, end_line, side)
     end_line = end_line,
     side = side or "new",
     body = body,
+    note_type = note_type or "comment",
   })
 end
 

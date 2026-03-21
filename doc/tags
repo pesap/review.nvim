@@ -1,0 +1,17 @@
+:Review	review.txt	/*:Review*
+:Review-pr	review.txt	/*:Review-pr*
+:ReviewClose	review.txt	/*:ReviewClose*
+:ReviewExport	review.txt	/*:ReviewExport*
+:ReviewSubmit	review.txt	/*:ReviewSubmit*
+Review	review.txt	/*Review*
+review-checkhealth	review.txt	/*review-checkhealth*
+review-commands	review.txt	/*review-commands*
+review-configuration	review.txt	/*review-configuration*
+review-contents	review.txt	/*review-contents*
+review-introduction	review.txt	/*review-introduction*
+review-keymaps	review.txt	/*review-keymaps*
+review-requirements	review.txt	/*review-requirements*
+review-setup	review.txt	/*review-setup*
+review.nvim	review.txt	/*review.nvim*
+review.txt	review.txt	/*review.txt*
+visual	review.txt	/*visual*

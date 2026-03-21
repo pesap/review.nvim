@@ -29,6 +29,17 @@ end, {
   desc = "Submit review comments",
 })
 
+vim.api.nvim_create_user_command("ReviewToggle", function()
+  local st = require("review.state")
+  if st.get() then
+    require("review").close()
+  else
+    require("review").open({})
+  end
+end, {
+  desc = "Toggle code review panel",
+})
+
 vim.api.nvim_create_user_command("ReviewExport", function(opts)
   require("review").export(opts.fargs[1])
 end, {
