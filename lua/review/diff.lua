@@ -5,8 +5,7 @@ local M = {}
 ---@param header string
 ---@return number old_start, number old_count, number new_start, number new_count
 local function parse_hunk_header(header)
-  local old_start, old_count, new_start, new_count =
-    header:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
+  local old_start, old_count, new_start, new_count = header:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
   if not old_start then
     return 0, 0, 0, 0
   end

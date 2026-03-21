@@ -91,7 +91,11 @@ function M.log(base_ref, head_ref)
   local range = base_ref .. ".." .. head_ref
   -- Format: sha<TAB>short_msg<TAB>author_name
   local out = vim.fn.systemlist({
-    "git", "log", "--format=%H\t%s\t%an", "--reverse", range,
+    "git",
+    "log",
+    "--format=%H\t%s\t%an",
+    "--reverse",
+    range,
   })
   if vim.v.shell_error ~= 0 then
     return {}

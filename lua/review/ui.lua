@@ -455,7 +455,6 @@ local function build_split_display(file)
         table.insert(old_lines, string.format("%s│ │%s", old_num, dl.text))
         table.insert(new_lines, string.format("%s│ │%s", new_num, dl.text))
         i = i + 1
-
       elseif dl.type == "del" then
         -- Collect consecutive del lines
         local dels = {}
@@ -528,7 +527,6 @@ local function build_split_display(file)
             table.insert(new_lines, "")
           end
         end
-
       elseif dl.type == "add" then
         -- Standalone adds (no preceding del)
         local num = dl.new_lnum and string.format("%4d", dl.new_lnum) or "    "
@@ -1046,7 +1044,9 @@ function M.open_note_float(opts)
     if ui_state and vim.api.nvim_buf_is_valid(ui_state.diff_buf) then
       local sl_display = opts.start_line or vim.api.nvim_win_get_cursor(get_diff_win() or 0)[1]
       local el_display = opts.end_line or sl_display
-      if sl_display > el_display then sl_display, el_display = el_display, sl_display end
+      if sl_display > el_display then
+        sl_display, el_display = el_display, sl_display
+      end
       local buf_lines = vim.api.nvim_buf_get_lines(ui_state.diff_buf, sl_display - 1, el_display, false)
       for _, l in ipairs(buf_lines) do
         -- Strip the gutter (line numbers + separator), keep just the code
@@ -1054,7 +1054,7 @@ function M.open_note_float(opts)
         table.insert(selected_text, code)
       end
     end
-    local template = { "```suggestion", }
+    local template = { "```suggestion" }
     for _, t in ipairs(selected_text) do
       table.insert(template, t)
     end
@@ -1275,7 +1275,9 @@ function M.jump_to_note(direction)
   end
 
   table.sort(entries, function(a, b)
-    if a.fi ~= b.fi then return a.fi < b.fi end
+    if a.fi ~= b.fi then
+      return a.fi < b.fi
+    end
     return a.dl < b.dl
   end)
 
@@ -1543,10 +1545,18 @@ function M.open_notes_list()
     end
   end
 
-  vim.keymap.set("n", "]n", function() jump_in_list(1) end, buf_opts)
-  vim.keymap.set("n", "[n", function() jump_in_list(-1) end, buf_opts)
-  vim.keymap.set("n", "j", function() jump_in_list(1) end, buf_opts)
-  vim.keymap.set("n", "k", function() jump_in_list(-1) end, buf_opts)
+  vim.keymap.set("n", "]n", function()
+    jump_in_list(1)
+  end, buf_opts)
+  vim.keymap.set("n", "[n", function()
+    jump_in_list(-1)
+  end, buf_opts)
+  vim.keymap.set("n", "j", function()
+    jump_in_list(1)
+  end, buf_opts)
+  vim.keymap.set("n", "k", function()
+    jump_in_list(-1)
+  end, buf_opts)
 end
 
 --- Refresh both panels (call after state changes).

@@ -224,7 +224,10 @@ describe("word diff", function()
   it("pairs consecutive del/add lines", function()
     local hunk = {
       header = "@@ -1,3 +1,3 @@",
-      old_start = 1, old_count = 3, new_start = 1, new_count = 3,
+      old_start = 1,
+      old_count = 3,
+      new_start = 1,
+      new_count = 3,
       lines = {
         { type = "ctx", text = "context", old_lnum = 1, new_lnum = 1 },
         { type = "del", text = "old1", old_lnum = 2 },
