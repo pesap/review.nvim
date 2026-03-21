@@ -61,14 +61,24 @@ function M.open(args)
   local mode = "local"
   local ref = nil
 
-  if #args > 0 and args[1] == "pr" then
-    vim.notify("PR mode coming soon. For now, use :Review [ref] for local diffs.", vim.log.levels.INFO)
-    return
-  elseif #args > 0 then
+  if #args > 0 then
     ref = args[1]
   end
 
-  -- Local mode: get diff
+  -- No ref given: try to detect a PR and diff against its base branch
+  if not ref then
+    local forge = require("review.forge")
+    local info = forge.detect()
+    if info then
+      -- On a PR branch — diff against the base
+      local base = git.default_branch()
+      if base then
+        ref = base
+        vim.notify(string.format("Reviewing %s PR #%d against %s", info.forge, info.pr_number, ref), vim.log.levels.INFO)
+      end
+    end
+  end
+
   local diff_text = git.diff(ref)
   if diff_text == "" then
     vim.notify("No changes to review" .. (ref and (" against " .. ref) or ""), vim.log.levels.INFO)
