@@ -18,6 +18,7 @@ local defaults = {
     prev_note = "[n",
     toggle_split = "s",
     notes_list = "N",
+    suggestion = "S",
     close = "q",
   },
 }

@@ -235,7 +235,6 @@ local function render_explorer(buf)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
-  -- Apply highlights
   local ns = vim.api.nvim_create_namespace("review_explorer")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, h in ipairs(highlights) do
@@ -367,7 +366,6 @@ local function render_diff(buf)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
-  -- Apply highlights
   local ns = vim.api.nvim_create_namespace("review_diff")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, h in ipairs(highlights) do
@@ -469,6 +467,18 @@ local function build_split_display(file)
           i = i + 1
         end
 
+        -- Pre-compute word diffs for paired lines (once per pair)
+        local num_pairs = math.min(#dels, #adds)
+        local pair_diffs = {}
+        for j = 1, num_pairs do
+          local d_pair = pair_map[dels[j].idx]
+          if d_pair then
+            local del_l = hunk.lines[d_pair[1]]
+            local add_l = hunk.lines[d_pair[2]]
+            pair_diffs[j] = { diff_mod.word_diff(del_l.text, add_l.text) }
+          end
+        end
+
         local max_count = math.max(#dels, #adds)
         for j = 1, max_count do
           if j <= #dels then
@@ -479,13 +489,9 @@ local function build_split_display(file)
             local line_idx = #old_lines - 1
             table.insert(old_hl, { line = line_idx, hl = HL.del, col_start = 0, col_end = -1 })
 
-            -- Word-level highlight
-            local pair = pair_map[d.idx]
-            if pair then
-              local del_l = hunk.lines[pair[1]]
-              local add_l = hunk.lines[pair[2]]
-              local old_ranges, _ = diff_mod.word_diff(del_l.text, add_l.text)
-              local gutter_len = #num + 3 -- "NNNN│-│"
+            if pair_diffs[j] then
+              local old_ranges = pair_diffs[j][1]
+              local gutter_len = #num + 3
               for _, range in ipairs(old_ranges) do
                 table.insert(old_hl, {
                   line = line_idx,
@@ -507,12 +513,8 @@ local function build_split_display(file)
             local line_idx = #new_lines - 1
             table.insert(new_hl, { line = line_idx, hl = HL.add, col_start = 0, col_end = -1 })
 
-            -- Word-level highlight
-            local pair = pair_map[a.idx]
-            if pair then
-              local del_l = hunk.lines[pair[1]]
-              local add_l = hunk.lines[pair[2]]
-              local _, new_ranges = diff_mod.word_diff(del_l.text, add_l.text)
+            if pair_diffs[j] then
+              local new_ranges = pair_diffs[j][2]
               local gutter_len = #num + 3
               for _, range in ipairs(new_ranges) do
                 table.insert(new_hl, {
@@ -829,7 +831,6 @@ local function setup_diff_keymaps(buf)
   end
   local vopts = { buffer = buf, noremap = true, silent = true, nowait = true }
   vim.keymap.set("v", km.add_note, visual_add_note, vopts)
-  vim.keymap.set("v", "A", visual_add_note, vopts)
 
   vim.keymap.set("n", km.edit_note, function()
     M.edit_note_at_cursor()
@@ -855,11 +856,11 @@ local function setup_diff_keymaps(buf)
     M.open_notes_list()
   end, opts)
 
-  vim.keymap.set("n", "S", function()
+  vim.keymap.set("n", km.suggestion, function()
     M.open_note_float({ suggestion = true })
   end, opts)
 
-  vim.keymap.set("v", "S", function()
+  vim.keymap.set("v", km.suggestion, function()
     local sl = vim.fn.line("v")
     local el = vim.fn.line(".")
     M.open_note_float({ range = true, suggestion = true, start_line = sl, end_line = el })
@@ -916,7 +917,7 @@ function M.open()
     diff_buf = diff_buf,
     diff_win = diff_win,
     tab = tab,
-    view_mode = "unified",
+    view_mode = config.view or "unified",
   })
 
   -- Set up keymaps
@@ -1400,6 +1401,7 @@ function M.open_notes_list()
 
   local list_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[list_buf].buftype = "nofile"
+  vim.bo[list_buf].bufhidden = "wipe"
   vim.api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
   vim.bo[list_buf].modifiable = false
 
@@ -1479,11 +1481,11 @@ function M.open_notes_list()
       state.set_file(file_idx)
       M.refresh()
 
-      -- Focus diff window and jump to line
-      if not vim.api.nvim_win_is_valid(ui_s.diff_win) then
+      local ui_state = state.get_ui()
+      if not ui_state or not vim.api.nvim_win_is_valid(ui_state.diff_win) then
         return
       end
-      vim.api.nvim_set_current_win(ui_s.diff_win)
+      vim.api.nvim_set_current_win(ui_state.diff_win)
 
       local dl = note_to_display_line({ line = target_line, side = target_side }, file.hunks)
       if not dl then
@@ -1491,7 +1493,7 @@ function M.open_notes_list()
         dl = note_to_display_line({ line = target_line, side = other }, file.hunks)
       end
       if dl then
-        vim.api.nvim_win_set_cursor(ui_s.diff_win, { dl, 0 })
+        vim.api.nvim_win_set_cursor(ui_state.diff_win, { dl, 0 })
       end
     end)
   end, buf_opts)
