@@ -1,0 +1,164 @@
+*review.txt*  *review.nvim*  *Review*    Code review plugin for Neovim
+
+==============================================================================
+CONTENTS                                                    *review-contents*
+
+    1. Introduction ............................ |review-introduction|
+    2. Requirements ............................ |review-requirements|
+    3. Setup ................................... |review-setup|
+    4. Commands ................................ |review-commands|
+    5. Keymaps ................................. |review-keymaps|
+    6. Configuration ........................... |review-configuration|
+    7. Checkhealth .............................. |review-checkhealth|
+
+==============================================================================
+1. INTRODUCTION                                          *review-introduction*
+
+review.nvim is a minimal code review plugin for Neovim. It provides a
+dual-panel layout for reviewing git diffs with inline notes and (coming soon)
+GitHub PR integration.
+
+Features:
+- Dual-panel layout: file explorer + diff viewer
+- Unified and side-by-side split diff views
+- Word-level diff highlighting
+- Commit-level navigation with per-commit file filtering
+- Inline notes on diff lines (normal and visual range selection)
+- Export notes to markdown
+- GitHub PR review with draft comments and batch submission (planned)
+
+==============================================================================
+2. REQUIREMENTS                                          *review-requirements*
+
+- Neovim >= 0.9.0
+- git
+- gh CLI (https://cli.github.com/) — for PR features
+- plenary.nvim — for running tests
+
+==============================================================================
+3. SETUP                                                      *review-setup*
+
+Add the plugin with your package manager, then call setup: >lua
+
+    require("review").setup({
+      -- defaults shown
+      view = "unified",  -- "unified" or "split"
+    })
+<
+
+==============================================================================
+4. COMMANDS                                                *review-commands*
+
+                                                                    *:Review*
+:Review [ref]           Open a diff review. If {ref} is given, diffs the
+                        working tree against that ref (e.g. `HEAD~3`,
+                        `main`, a commit SHA). If no ref is given, shows
+                        unstaged changes.
+
+                        When diffing against a ref that has multiple commits
+                        in the range, the commit list is shown in the
+                        explorer panel. Select a commit to filter files to
+                        that commit's changes.
+
+                                                               *:Review-pr*
+:Review pr [number]     Open a GitHub PR for review. If {number} is given,
+                        opens that PR. Otherwise auto-detects the PR for
+                        the current branch. (Planned feature)
+
+                                                             *:ReviewToggle*
+:ReviewToggle           Toggle the review panel. Opens if closed, closes
+                        if open.
+
+                                                              *:ReviewClose*
+:ReviewClose            Close the review layout and end the session.
+
+                                                             *:ReviewSubmit*
+:ReviewSubmit           Submit all accumulated draft comments as a GitHub
+                        review. Only available in PR mode. (Planned feature)
+
+                                                             *:ReviewExport*
+:ReviewExport [path]    Export all notes to a markdown file. Defaults to
+                        `review-notes.md` in the current directory.
+
+==============================================================================
+5. KEYMAPS                                                  *review-keymaps*
+
+All keymaps are buffer-local to the review buffers.
+
+Explorer panel:~
+
+    <CR>        Select a commit or file under the cursor. Selecting a
+                commit filters the file list to that commit's changes.
+                Selecting "All changes" shows the full diff.
+    q           Close the review.
+
+Diff viewer:~
+
+    a           Add a note on the current line (also works in visual mode).
+    A           Add a note on a visual selection (range).
+    S           Add a suggestion note (pre-populated with selected code).
+                Works in normal and visual mode.
+    e           Edit the note on the current line.
+    d           Delete the note on the current line.
+    N           Show all notes in a floating list.
+    ]c          Jump to the next hunk.
+    [c          Jump to the previous hunk.
+    ]f          Jump to the next file.
+    [f          Jump to the previous file.
+    ]n          Jump to the next note (across files).
+    [n          Jump to the previous note (across files).
+    s           Toggle between unified and side-by-side split view.
+    q           Close the review.
+
+Notes list (N):~
+
+    j / ]n      Jump to next note entry.
+    k / [n      Jump to previous note entry.
+    <CR>        Jump to the note in the diff view.
+    dd          Delete the note.
+    q / <Esc>   Close the list.
+
+Note float:~
+
+    <C-s>       Save the note and close.
+    :w          Save the note and close.
+    :wq         Save the note and close.
+    <Esc>       Cancel and close (normal mode).
+
+==============================================================================
+6. CONFIGURATION                                      *review-configuration*
+
+Default configuration: >lua
+
+    require("review").setup({
+      view = "unified",       -- "unified" or "split"
+      colorblind = false,     -- Use blue/yellow instead of red/green
+      keymaps = {
+        add_note = "a",
+        edit_note = "e",
+        delete_note = "d",
+        next_hunk = "]c",
+        prev_hunk = "[c",
+        next_file = "]f",
+        prev_file = "[f",
+        next_note = "]n",
+        prev_note = "[n",
+        toggle_split = "s",
+        notes_list = "N",
+        close = "q",
+      },
+    })
+<
+
+==============================================================================
+7. CHECKHEALTH                                          *review-checkhealth*
+
+Run `:checkhealth review` to verify your environment:
+
+- git is installed
+- gh CLI is installed
+- gh is authenticated (`gh auth login`)
+- Current directory is a git repository
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
