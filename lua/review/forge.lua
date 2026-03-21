@@ -74,7 +74,16 @@ local function github_post(info, note, ctx)
   }, json)
 
   if vim.v.shell_error ~= 0 then
-    return nil, "GitHub API error: " .. (out or "unknown")
+    local msg = out or "unknown"
+    -- Provide actionable hints for common HTTP errors
+    if msg:match("404") then
+      msg = "Not found — verify the file path exists in the PR diff and your commits are pushed."
+    elseif msg:match("422") then
+      msg = "Invalid position — the line number may not exist in the PR diff for this commit."
+    elseif msg:match("403") then
+      msg = "Permission denied — check that your gh token has write access to this repo."
+    end
+    return nil, "GitHub API: " .. msg
   end
 
   local ok, data = pcall(vim.fn.json_decode, out)
@@ -123,7 +132,15 @@ local function gitlab_post(info, note, ctx)
   }, json)
 
   if vim.v.shell_error ~= 0 then
-    return nil, "GitLab API error: " .. (out or "unknown")
+    local msg = out or "unknown"
+    if msg:match("404") then
+      msg = "Not found — verify the file path exists in the MR diff and your commits are pushed."
+    elseif msg:match("422") then
+      msg = "Invalid position — the line number may not exist in the MR diff for this commit."
+    elseif msg:match("403") then
+      msg = "Permission denied — check that your glab token has write access to this project."
+    end
+    return nil, "GitLab API: " .. msg
   end
 
   local ok, data = pcall(vim.fn.json_decode, out)
@@ -143,7 +160,13 @@ function M.resolve_context(info)
     if vim.v.shell_error ~= 0 or not out[1] then
       return nil, "Failed to resolve PR head commit"
     end
-    return { commit_id = out[1] }, nil
+    local remote_head = out[1]
+    -- Check if the local HEAD matches the remote PR head
+    local local_head = vim.fn.systemlist({ "git", "rev-parse", "HEAD" })
+    if vim.v.shell_error == 0 and local_head[1] and local_head[1] ~= remote_head then
+      return nil, "Local HEAD differs from remote PR head. Push your commits before publishing."
+    end
+    return { commit_id = remote_head }, nil
   elseif info.forge == "gitlab" then
     local project_id = info.owner .. "/" .. info.repo
     local out = vim.fn.system({
