@@ -93,6 +93,10 @@ Note editor: `<C-s>` or `:wq` save, `<Esc>` cancel
 
 Frankenstein of [afewyards/codereview.nvim](https://github.com/afewyards/codereview.nvim) and [MaraniMatias/codereview.nvim](https://github.com/MaraniMatias/codereview.nvim).
 
+## Acknowledgments
+
+This repo was bootstrapped with the [ellisonleao/nvim-plugin-template](https://github.com/ellisonleao/nvim-plugin-template).
+
 ## License
 
 MIT
