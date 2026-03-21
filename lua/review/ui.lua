@@ -1405,7 +1405,15 @@ function M.open_notes_list()
         end
         local icon = (note.note_type == "suggestion") and "S" or " "
         local url_suffix = note.url and (" " .. note.url) or ""
-        local display = string.format("   %s %s #%-3d L%-6s %s%s", status_char, icon, note.id or 0, line_ref, body_preview, url_suffix)
+        local display = string.format(
+          "   %s %s #%-3d L%-6s %s%s",
+          status_char,
+          icon,
+          note.id or 0,
+          line_ref,
+          body_preview,
+          url_suffix
+        )
         table.insert(lines, display)
         highlight_rows[#lines] = { hl = status_hl, col_start = 3, col_end = 4 }
         note_refs[#lines] = {
@@ -1446,7 +1454,12 @@ function M.open_notes_list()
     col = col,
     style = "minimal",
     border = "rounded",
-    title = string.format(" Notes (%d staged, %d draft, %d published) │ p stage  P publish  C clear  q close ", #staged, #drafts, #published),
+    title = string.format(
+      " Notes (%d staged, %d draft, %d published) │ s stage  P publish  C clear  q close ",
+      #staged,
+      #drafts,
+      #published
+    ),
     title_pos = "center",
   })
 
@@ -1488,8 +1501,8 @@ function M.open_notes_list()
     vim.api.nvim_win_close(list_win, true)
   end, buf_opts)
 
-  -- p: toggle draft <-> staged
-  vim.keymap.set("n", "p", function()
+  -- s: toggle draft <-> staged
+  vim.keymap.set("n", "s", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
     local ref = note_refs[cursor[1]]
     if not ref or ref == false or not ref.note_id then
@@ -1528,7 +1541,10 @@ function M.open_notes_list()
       return
     end
 
-    vim.notify(string.format("Publishing %d note(s) to %s PR #%d...", #staged_notes, info.forge, info.pr_number), vim.log.levels.INFO)
+    vim.notify(
+      string.format("Publishing %d note(s) to %s PR #%d...", #staged_notes, info.forge, info.pr_number),
+      vim.log.levels.INFO
+    )
 
     local ctx, ctx_err = forge.resolve_context(info)
     if not ctx then
@@ -1551,7 +1567,7 @@ function M.open_notes_list()
 
     if #errors > 0 then
       vim.notify(
-        string.format("%d published, %d failed:\n%s", count - #errors, #errors, table.concat(errors, "\n")),
+        string.format("%d published, %d failed:\n%s", count, #errors, table.concat(errors, "\n")),
         vim.log.levels.WARN
       )
     else

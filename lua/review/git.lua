@@ -94,7 +94,6 @@ function M.log(base_ref, head_ref)
     "git",
     "log",
     "--format=%H\t%s\t%an",
-    "--reverse",
     range,
   })
   if vim.v.shell_error ~= 0 then

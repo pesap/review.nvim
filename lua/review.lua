@@ -74,7 +74,10 @@ function M.open(args)
       local base = git.default_branch()
       if base then
         ref = base
-        vim.notify(string.format("Reviewing %s PR #%d against %s", info.forge, info.pr_number, ref), vim.log.levels.INFO)
+        vim.notify(
+          string.format("Reviewing %s PR #%d against %s", info.forge, info.pr_number, ref),
+          vim.log.levels.INFO
+        )
       end
     end
   end

@@ -37,8 +37,18 @@ function M.check()
   local remote = git.parse_remote()
   local forge = remote and remote.forge or nil
 
-  check_cli("gh", "https://cli.github.com/", "Required for publishing notes to GitHub PRs", forge == "github" or not forge)
-  check_cli("glab", "https://gitlab.com/gitlab-org/cli", "Required for publishing notes to GitLab MRs", forge == "gitlab")
+  check_cli(
+    "gh",
+    "https://cli.github.com/",
+    "Required for publishing notes to GitHub PRs",
+    forge == "github" or not forge
+  )
+  check_cli(
+    "glab",
+    "https://gitlab.com/gitlab-org/cli",
+    "Required for publishing notes to GitLab MRs",
+    forge == "gitlab"
+  )
 
   if git.root() then
     vim.health.ok("Current directory is a git repository")

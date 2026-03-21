@@ -64,9 +64,13 @@ local function github_post(info, note, ctx)
   local endpoint = string.format("repos/%s/%s/pulls/%d/comments", info.owner, info.repo, info.pr_number)
 
   local out = vim.fn.system({
-    "gh", "api", endpoint,
-    "-X", "POST",
-    "--input", "-",
+    "gh",
+    "api",
+    endpoint,
+    "-X",
+    "POST",
+    "--input",
+    "-",
   }, json)
 
   if vim.v.shell_error ~= 0 then
@@ -105,12 +109,17 @@ local function gitlab_post(info, note, ctx)
   end
 
   local json = vim.fn.json_encode({ body = note.body, position = position })
-  local endpoint = string.format("projects/%s/merge_requests/%d/discussions", vim.fn.fnameescape(project_id), info.pr_number)
+  local endpoint =
+    string.format("projects/%s/merge_requests/%d/discussions", vim.fn.fnameescape(project_id), info.pr_number)
 
   local out = vim.fn.system({
-    "glab", "api", endpoint,
-    "-X", "POST",
-    "--input", "-",
+    "glab",
+    "api",
+    endpoint,
+    "-X",
+    "POST",
+    "--input",
+    "-",
   }, json)
 
   if vim.v.shell_error ~= 0 then
@@ -130,16 +139,19 @@ end
 ---@return table|nil ctx, string|nil err
 function M.resolve_context(info)
   if info.forge == "github" then
-    local out = vim.fn.systemlist({ "git", "rev-parse", "HEAD" })
+    local out = vim.fn.systemlist({ "gh", "pr", "view", "--json", "headRefOid", "-q", ".headRefOid" })
     if vim.v.shell_error ~= 0 or not out[1] then
-      return nil, "Failed to resolve HEAD commit"
+      return nil, "Failed to resolve PR head commit"
     end
     return { commit_id = out[1] }, nil
   elseif info.forge == "gitlab" then
     local project_id = info.owner .. "/" .. info.repo
     local out = vim.fn.system({
-      "glab", "api", string.format("projects/%s/merge_requests/%d", vim.fn.fnameescape(project_id), info.pr_number),
-      "--jq", ".diff_refs",
+      "glab",
+      "api",
+      string.format("projects/%s/merge_requests/%d", vim.fn.fnameescape(project_id), info.pr_number),
+      "--jq",
+      ".diff_refs",
     })
     if vim.v.shell_error ~= 0 then
       return nil, "Failed to get MR diff refs"

@@ -304,9 +304,9 @@ function M.publish_staged(url_map)
   url_map = url_map or {}
   local count = 0
   for _, note in ipairs(session.notes) do
-    if note.status == "staged" then
+    if note.status == "staged" and url_map[note.id] then
       note.status = "published"
-      note.url = url_map[note.id] or nil
+      note.url = url_map[note.id]
       count = count + 1
     end
   end
