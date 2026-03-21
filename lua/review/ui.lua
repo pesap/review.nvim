@@ -21,6 +21,9 @@ local HL = {
   commit = "ReviewCommit",
   commit_active = "ReviewCommitActive",
   commit_author = "ReviewCommitAuthor",
+  note_published = "ReviewNotePublished",
+  note_draft = "ReviewNoteDraft",
+  note_ref = "ReviewNoteRef",
 }
 
 --- Set up highlight groups (called once).
@@ -52,6 +55,9 @@ function M.setup_highlights(colorblind)
   set(0, HL.commit, { fg = "#d19a66" })
   set(0, HL.commit_active, { fg = "#e5c07b", bold = true })
   set(0, HL.commit_author, { fg = "#888888", italic = true })
+  set(0, HL.note_published, { fg = "#98c379" })
+  set(0, HL.note_draft, { fg = "#e5c07b" })
+  set(0, HL.note_ref, { fg = "#61afef", underline = true })
 end
 
 --- Create a scratch buffer with given options.
@@ -198,10 +204,21 @@ local function render_explorer(buf)
       icon = "→"
     end
 
-    local note_count = #state.get_notes(file.path)
+    local file_notes = state.get_notes(file.path)
+    local note_count = #file_notes
     local note_badge = ""
     if note_count > 0 then
-      note_badge = " [" .. note_count .. "]"
+      local staged_count = 0
+      for _, n in ipairs(file_notes) do
+        if n.status == "staged" then
+          staged_count = staged_count + 1
+        end
+      end
+      if staged_count > 0 then
+        note_badge = string.format(" [%d/%d]", staged_count, note_count)
+      else
+        note_badge = " [" .. note_count .. "]"
+      end
     end
 
     local line = string.format("   %s %s%s", icon, file.path, note_badge)
@@ -1121,28 +1138,12 @@ function M.edit_note_at_cursor()
     return
   end
 
-  -- Find existing note at this position
-  local s = state.get()
-  if not s then
-    return
-  end
-
-  local note_idx = nil
-  for i, note in ipairs(s.notes) do
-    if note.file_path == file.path and note.line == target_line and note.side == side then
-      note_idx = i
-      break
-    end
-  end
-
-  if not note_idx then
+  local note, note_idx = state.find_note_at(file.path, target_line, side)
+  if not note then
     vim.notify("No note on this line", vim.log.levels.INFO)
     return
   end
 
-  local note = s.notes[note_idx]
-
-  -- Open float pre-populated with note body
   local width = math.floor(vim.o.columns * 0.5)
   local height = 10
   local row = math.floor((vim.o.lines - height) / 2)
@@ -1154,7 +1155,6 @@ function M.edit_note_at_cursor()
   local body_lines = vim.split(note.body, "\n")
   vim.api.nvim_buf_set_lines(note_buf, 0, -1, false, body_lines)
 
-  -- Allow :w and :wq
   vim.bo[note_buf].bufhidden = "wipe"
 
   local note_win = vim.api.nvim_open_win(note_buf, true, {
@@ -1170,9 +1170,8 @@ function M.edit_note_at_cursor()
   })
 
   setup_note_float_keymaps(note_buf, note_win, function()
-    -- Save
     local lines = vim.api.nvim_buf_get_lines(note_buf, 0, -1, false)
-    note.body = table.concat(lines, "\n")
+    state.update_note_body(note_idx, table.concat(lines, "\n"))
     M.refresh()
   end, function()
     vim.api.nvim_win_close(note_win, true)
@@ -1197,21 +1196,15 @@ function M.delete_note_at_cursor()
     return
   end
 
-  local s = state.get()
-  if not s then
+  local _, note_idx = state.find_note_at(file.path, target_line, side)
+  if not note_idx then
+    vim.notify("No note on this line", vim.log.levels.INFO)
     return
   end
 
-  for i, note in ipairs(s.notes) do
-    if note.file_path == file.path and note.line == target_line and note.side == side then
-      table.remove(s.notes, i)
-      vim.notify("Note deleted", vim.log.levels.INFO)
-      M.refresh()
-      return
-    end
-  end
-
-  vim.notify("No note on this line", vim.log.levels.INFO)
+  state.remove_note(note_idx)
+  vim.notify("Note deleted", vim.log.levels.INFO)
+  M.refresh()
 end
 
 --- Resolve a note to a display line in a file's diff.
@@ -1355,43 +1348,83 @@ function M.open_notes_list()
   end
 
   local lines = {}
-  local note_refs = {} -- maps display line -> {note_idx, file_path, line}
+  local note_refs = {} -- maps display line -> {note_idx, file_path, line, note_id}
+  local highlight_rows = {} -- {line_idx, hl_group, col_start, col_end}
 
-  -- Group by file
-  local by_file = {}
-  local file_order = {}
+  -- Split notes by status
+  local drafts = {}
+  local staged = {}
+  local published = {}
   for i, note in ipairs(all_notes) do
-    if not by_file[note.file_path] then
-      by_file[note.file_path] = {}
-      table.insert(file_order, note.file_path)
+    local entry = { idx = i, note = note }
+    if note.status == "published" then
+      table.insert(published, entry)
+    elseif note.status == "staged" then
+      table.insert(staged, entry)
+    else
+      table.insert(drafts, entry)
     end
-    table.insert(by_file[note.file_path], { idx = i, note = note })
   end
 
-  for _, fp in ipairs(file_order) do
-    table.insert(lines, fp)
-    note_refs[#lines] = false -- file header, not selectable
+  -- Render a section of notes grouped by file
+  local function render_section(section_notes, section_label, status_char, status_hl)
+    if #section_notes == 0 then
+      return
+    end
 
-    for _, entry in ipairs(by_file[fp]) do
-      local note = entry.note
-      local line_ref = tostring(note.line)
-      if note.end_line then
-        line_ref = line_ref .. "-" .. tostring(note.end_line)
+    table.insert(lines, section_label)
+    highlight_rows[#lines] = { hl = HL.file_header }
+    note_refs[#lines] = false
+
+    -- Group by file
+    local by_file = {}
+    local file_order = {}
+    for _, entry in ipairs(section_notes) do
+      local fp = entry.note.file_path
+      if not by_file[fp] then
+        by_file[fp] = {}
+        table.insert(file_order, fp)
       end
-      -- First line of note body, truncated
-      local body_preview = note.body:match("^([^\n]*)") or ""
-      if #body_preview > 60 then
-        body_preview = body_preview:sub(1, 57) .. "..."
+      table.insert(by_file[fp], entry)
+    end
+
+    for _, fp in ipairs(file_order) do
+      table.insert(lines, "  " .. fp)
+      highlight_rows[#lines] = { hl = HL.explorer_file }
+      note_refs[#lines] = false
+
+      for _, entry in ipairs(by_file[fp]) do
+        local note = entry.note
+        local line_ref = tostring(note.line)
+        if note.end_line then
+          line_ref = line_ref .. "-" .. tostring(note.end_line)
+        end
+        local body_preview = note.body:match("^([^\n]*)") or ""
+        if #body_preview > 50 then
+          body_preview = body_preview:sub(1, 47) .. "..."
+        end
+        local icon = (note.note_type == "suggestion") and "S" or " "
+        local url_suffix = note.url and (" " .. note.url) or ""
+        local display = string.format("   %s %s #%-3d L%-6s %s%s", status_char, icon, note.id or 0, line_ref, body_preview, url_suffix)
+        table.insert(lines, display)
+        highlight_rows[#lines] = { hl = status_hl, col_start = 3, col_end = 4 }
+        note_refs[#lines] = {
+          idx = entry.idx,
+          file_path = fp,
+          line = note.line,
+          side = note.side,
+          note_id = note.id,
+        }
       end
-      local icon = (note.note_type == "suggestion") and "S" or " "
-      local display = string.format(" %s L%-6s %s", icon, line_ref, body_preview)
-      table.insert(lines, display)
-      note_refs[#lines] = { idx = entry.idx, file_path = fp, line = note.line, side = note.side }
     end
 
     table.insert(lines, "")
     note_refs[#lines] = false
   end
+
+  render_section(staged, "Staged", "+", HL.note_published)
+  render_section(drafts, "Draft", "-", HL.note_draft)
+  render_section(published, "Published", "*", HL.note_sign)
 
   -- Create float
   local width = math.min(math.floor(vim.o.columns * 0.7), 80)
@@ -1413,7 +1446,7 @@ function M.open_notes_list()
     col = col,
     style = "minimal",
     border = "rounded",
-    title = string.format(" Notes (%d) │ <CR> jump  q close ", #all_notes),
+    title = string.format(" Notes (%d staged, %d draft, %d published) │ p stage  P publish  C clear  q close ", #staged, #drafts, #published),
     title_pos = "center",
   })
 
@@ -1421,12 +1454,27 @@ function M.open_notes_list()
 
   -- Highlights
   local ns = vim.api.nvim_create_namespace("review_notes_list")
-  for i, line in ipairs(lines) do
-    if not note_refs[i] and line ~= "" then
-      -- File header
-      vim.api.nvim_buf_add_highlight(list_buf, ns, HL.file_header, i - 1, 0, -1)
-    elseif note_refs[i] and note_refs[i] ~= false then
-      vim.api.nvim_buf_add_highlight(list_buf, ns, HL.note_sign, i - 1, 2, 9)
+  for i, _ in ipairs(lines) do
+    local hr = highlight_rows[i]
+    if hr then
+      vim.api.nvim_buf_add_highlight(list_buf, ns, hr.hl, i - 1, hr.col_start or 0, hr.col_end or -1)
+    end
+    -- Highlight #<number> references in body previews
+    if note_refs[i] and note_refs[i] ~= false then
+      local line_text = lines[i]
+      local search_start = 1
+      while true do
+        local s_pos, e_pos = line_text:find("#%d+", search_start)
+        if not s_pos then
+          break
+        end
+        -- Skip the note's own #id (which appears early in the line)
+        local ref_id = tonumber(line_text:sub(s_pos + 1, e_pos))
+        if ref_id and note_refs[i].note_id and ref_id ~= note_refs[i].note_id then
+          vim.api.nvim_buf_add_highlight(list_buf, ns, HL.note_ref, i - 1, s_pos - 1, e_pos)
+        end
+        search_start = e_pos + 1
+      end
     end
   end
 
@@ -1440,6 +1488,117 @@ function M.open_notes_list()
     vim.api.nvim_win_close(list_win, true)
   end, buf_opts)
 
+  -- p: toggle draft <-> staged
+  vim.keymap.set("n", "p", function()
+    local cursor = vim.api.nvim_win_get_cursor(list_win)
+    local ref = note_refs[cursor[1]]
+    if not ref or ref == false or not ref.note_id then
+      return
+    end
+    state.toggle_staged(ref.note_id)
+    vim.api.nvim_win_close(list_win, true)
+    M.open_notes_list()
+    M.refresh()
+  end, buf_opts)
+
+  -- P: publish all staged notes
+  vim.keymap.set("n", "P", function()
+    local staged_notes = {}
+    for _, note in ipairs(all_notes) do
+      if note.status == "staged" then
+        table.insert(staged_notes, note)
+      end
+    end
+
+    if #staged_notes == 0 then
+      vim.notify("No staged notes to publish", vim.log.levels.INFO)
+      return
+    end
+
+    local forge = require("review.forge")
+    local info = forge.detect()
+
+    if not info then
+      -- No PR/MR detected, publish locally only
+      local count = state.publish_staged()
+      vim.notify(count .. " note(s) published locally (no PR/MR detected)", vim.log.levels.INFO)
+      vim.api.nvim_win_close(list_win, true)
+      M.open_notes_list()
+      M.refresh()
+      return
+    end
+
+    vim.notify(string.format("Publishing %d note(s) to %s PR #%d...", #staged_notes, info.forge, info.pr_number), vim.log.levels.INFO)
+
+    local ctx, ctx_err = forge.resolve_context(info)
+    if not ctx then
+      vim.notify("Failed to resolve context: " .. (ctx_err or "unknown"), vim.log.levels.ERROR)
+      return
+    end
+
+    local url_map = {}
+    local errors = {}
+    for _, note in ipairs(staged_notes) do
+      local url, err = forge.post_comment(info, note, ctx)
+      if url then
+        url_map[note.id] = url
+      elseif err then
+        table.insert(errors, string.format("#%d: %s", note.id, err))
+      end
+    end
+
+    local count = state.publish_staged(url_map)
+
+    if #errors > 0 then
+      vim.notify(
+        string.format("%d published, %d failed:\n%s", count - #errors, #errors, table.concat(errors, "\n")),
+        vim.log.levels.WARN
+      )
+    else
+      vim.notify(count .. " note(s) published to " .. info.forge, vim.log.levels.INFO)
+    end
+
+    vim.api.nvim_win_close(list_win, true)
+    M.open_notes_list()
+    M.refresh()
+  end, buf_opts)
+
+  -- C: clear all notes
+  vim.keymap.set("n", "C", function()
+    local count = #all_notes
+    state.clear_notes()
+    vim.notify(count .. " note(s) cleared", vim.log.levels.INFO)
+    vim.api.nvim_win_close(list_win, true)
+    M.refresh()
+  end, buf_opts)
+
+  -- gd: jump to referenced note (find #<id> under cursor or in current line)
+  vim.keymap.set("n", "gd", function()
+    local cursor = vim.api.nvim_win_get_cursor(list_win)
+    local line_text = lines[cursor[1]]
+    if not line_text then
+      return
+    end
+    -- Find #<number> references in the line (skip the note's own ID)
+    local ref = note_refs[cursor[1]]
+    local own_id = (ref and ref ~= false) and ref.note_id or nil
+    for ref_str in line_text:gmatch("#(%d+)") do
+      local ref_id = tonumber(ref_str)
+      if ref_id and ref_id ~= own_id then
+        -- Find the line in the notes list that has this note_id
+        for line_nr, nr in pairs(note_refs) do
+          if nr and nr ~= false and nr.note_id == ref_id then
+            vim.api.nvim_win_set_cursor(list_win, { line_nr, 0 })
+            return
+          end
+        end
+        vim.notify("Note #" .. ref_id .. " not found", vim.log.levels.WARN)
+        return
+      end
+    end
+    vim.notify("No reference found on this line", vim.log.levels.INFO)
+  end, buf_opts)
+
   -- <CR>: jump to note
   vim.keymap.set("n", "<CR>", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
@@ -1449,22 +1608,18 @@ function M.open_notes_list()
       return
     end
 
-    -- Capture everything before closing
     local target_path = ref.file_path
     local target_line = ref.line
     local target_side = ref.side
 
     vim.api.nvim_win_close(list_win, true)
 
-    -- Schedule the jump so the float close settles first
     vim.schedule(function()
-      -- Switch to "All changes" view if a commit filter is active
       local sess = state.get()
       if sess and sess.current_commit_idx then
         state.set_commit(nil)
       end
 
-      -- Find the file
       local active = state.active_files()
       local file_idx, file
       for i, f in ipairs(active) do
@@ -1506,7 +1661,6 @@ function M.open_notes_list()
       return
     end
     state.remove_note(ref.idx)
-    -- Refresh the list
     vim.api.nvim_win_close(list_win, true)
     M.open_notes_list()
     M.refresh()
@@ -1523,7 +1677,6 @@ function M.open_notes_list()
           return
         end
       end
-      -- Wrap
       for i = 1, cur - 1 do
         if note_refs[i] and note_refs[i] ~= false then
           vim.api.nvim_win_set_cursor(list_win, { i, 0 })
@@ -1537,7 +1690,6 @@ function M.open_notes_list()
           return
         end
       end
-      -- Wrap
       for i = num_lines, cur + 1, -1 do
         if note_refs[i] and note_refs[i] ~= false then
           vim.api.nvim_win_set_cursor(list_win, { i, 0 })

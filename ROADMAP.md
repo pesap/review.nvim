@@ -7,10 +7,10 @@
 - [x] Colorblind friendly
 - [x] Suggestion note (e.g., suggesting replacing some piece of code.
 - [x] Simplified keybindings (configurable via setup)
-- [ ] See all commit history in a nice panel
-- [ ] Preview PR comments (maybe dry-run)
-- [ ] Clean and simple UI.
-- [ ] Reference other notes.
-- [ ] Add a section of published notes vs not published notes. This might
+- [x] See all commit history in a nice panel
+- [x] Preview PR comments (maybe dry-run)
+- [x] Clean and simple UI.
+- [x] Reference other notes.
+- [x] Add a section of published notes vs not published notes. This might
 involve saving temporary notes in lua temoporary path
 - [ ] Gitlab support

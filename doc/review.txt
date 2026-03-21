@@ -8,15 +8,15 @@ CONTENTS                                                    *review-contents*
     3. Setup ................................... |review-setup|
     4. Commands ................................ |review-commands|
     5. Keymaps ................................. |review-keymaps|
-    6. Configuration ........................... |review-configuration|
-    7. Checkhealth .............................. |review-checkhealth|
+    6. Notes workflow .......................... |review-notes|
+    7. Configuration ........................... |review-configuration|
+    8. Checkhealth .............................. |review-checkhealth|
 
 ==============================================================================
 1. INTRODUCTION                                          *review-introduction*
 
 review.nvim is a minimal code review plugin for Neovim. It provides a
-dual-panel layout for reviewing git diffs with inline notes and (coming soon)
-GitHub PR integration.
+dual-panel layout for reviewing git diffs with inline notes.
 
 Features:
 - Dual-panel layout: file explorer + diff viewer
@@ -24,8 +24,12 @@ Features:
 - Word-level diff highlighting
 - Commit-level navigation with per-commit file filtering
 - Inline notes on diff lines (normal and visual range selection)
+- Suggestion notes with GitHub-compatible `suggestion` blocks
+- Notes list panel with draft/staged/published workflow
+- Note persistence across sessions
+- Reference other notes with `#<id>` syntax
 - Export notes to markdown
-- GitHub PR review with draft comments and batch submission (planned)
+- Colorblind-friendly color scheme (enabled by default)
 
 ==============================================================================
 2. REQUIREMENTS                                          *review-requirements*
@@ -40,10 +44,14 @@ Features:
 
 Add the plugin with your package manager, then call setup: >lua
 
-    require("review").setup({
-      -- defaults shown
-      view = "unified",  -- "unified" or "split"
-    })
+    require("review").setup()
+<
+All options have sensible defaults. See |review-configuration| for the full
+list.
+
+You can also set up a keymap to toggle the review panel: >lua
+
+    vim.keymap.set("n", "<leader>rr", "<cmd>ReviewToggle<cr>")
 <
 
 ==============================================================================
@@ -60,15 +68,15 @@ Add the plugin with your package manager, then call setup: >lua
                         explorer panel. Select a commit to filter files to
                         that commit's changes.
 
-                                                               *:Review-pr*
-:Review pr [number]     Open a GitHub PR for review. If {number} is given,
-                        opens that PR. Otherwise auto-detects the PR for
-                        the current branch. (Planned feature)
+                        To review a PR: run `gh pr checkout <number>` first,
+                        then `:Review main` to see the diff.
 
                                                              *:ReviewToggle*
 :ReviewToggle           Toggle the review panel. Opens if closed, closes
-                        if open.
+                        if open. Also available as: >lua
 
+                            require("review").toggle()
+<
                                                               *:ReviewClose*
 :ReviewClose            Close the review layout and end the session.
 
@@ -83,7 +91,8 @@ Add the plugin with your package manager, then call setup: >lua
 ==============================================================================
 5. KEYMAPS                                                  *review-keymaps*
 
-All keymaps are buffer-local to the review buffers.
+All keymaps are buffer-local to the review buffers and configurable via
+|review-configuration|.
 
 Explorer panel:~
 
@@ -95,7 +104,6 @@ Explorer panel:~
 Diff viewer:~
 
     a           Add a note on the current line (also works in visual mode).
-    A           Add a note on a visual selection (range).
     S           Add a suggestion note (pre-populated with selected code).
                 Works in normal and visual mode.
     e           Edit the note on the current line.
@@ -111,11 +119,16 @@ Diff viewer:~
     q           Close the review.
 
 Notes list (N):~
+                                                         *review-notes-list*
 
     j / ]n      Jump to next note entry.
     k / [n      Jump to previous note entry.
     <CR>        Jump to the note in the diff view.
     dd          Delete the note.
+    p           Toggle the note between draft and staged.
+    P           Publish all staged notes.
+    C           Clear all notes.
+    gd          Jump to a referenced note (`#<id>` in the note body).
     q / <Esc>   Close the list.
 
 Note float:~
@@ -126,13 +139,44 @@ Note float:~
     <Esc>       Cancel and close (normal mode).
 
 ==============================================================================
-6. CONFIGURATION                                      *review-configuration*
+6. NOTES WORKFLOW                                              *review-notes*
+
+Notes go through three stages:
+
+  Draft (`-`)     Newly created notes start here.
+  Staged (`+`)    Press `p` in the notes list to mark as ready to publish.
+  Published (`*`) Press `P` to publish all staged notes at once.
+
+Notes are persisted automatically across sessions. They are stored as JSON
+in `vim.fn.stdpath("data")/review/`.
+
+                                                        *review-notes-refs*
+Note references~
+
+You can reference other notes by typing `#<id>` in the note body (e.g.
+"see #1 for context"). In the notes list:
+
+- References are highlighted with a distinct color.
+- Press `gd` on a line containing a reference to jump to that note.
+
+Each note is assigned an auto-incrementing ID visible in the notes list
+(e.g. `#1`, `#2`).
+
+                                                    *review-notes-explorer*
+Explorer badges~
+
+The explorer panel shows note counts next to each file. When some notes are
+staged, the badge shows `[staged/total]` (e.g. `[2/5]`).
+
+==============================================================================
+7. CONFIGURATION                                      *review-configuration*
 
 Default configuration: >lua
 
     require("review").setup({
       view = "unified",       -- "unified" or "split"
-      colorblind = false,     -- Use blue/yellow instead of red/green
+      colorblind = true,      -- blue/yellow scheme (default)
+                              -- set to false for red/green
       keymaps = {
         add_note = "a",
         edit_note = "e",
@@ -145,13 +189,14 @@ Default configuration: >lua
         prev_note = "[n",
         toggle_split = "s",
         notes_list = "N",
+        suggestion = "S",
         close = "q",
       },
     })
 <
 
 ==============================================================================
-7. CHECKHEALTH                                          *review-checkhealth*
+8. CHECKHEALTH                                          *review-checkhealth*
 
 Run `:checkhealth review` to verify your environment:
 

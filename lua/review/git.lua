@@ -116,24 +116,38 @@ function M.log(base_ref, head_ref)
   return commits
 end
 
---- Parse owner/repo from a GitHub remote URL.
----@return string|nil owner, string|nil repo
+--- Parse forge, owner, and repo from the remote URL.
+---@return {forge: string, owner: string, repo: string}|nil
 function M.parse_remote()
   local url = M.remote_url()
   if not url then
-    return nil, nil
+    return nil
   end
-  -- SSH: git@github.com:owner/repo.git
+
+  -- GitHub SSH: git@github.com:owner/repo.git
   local owner, repo = url:match("git@github%.com:([^/]+)/([^/%.]+)")
   if owner then
-    return owner, repo
+    return { forge = "github", owner = owner, repo = repo }
   end
-  -- HTTPS: https://github.com/owner/repo.git
+  -- GitHub HTTPS: https://github.com/owner/repo.git
   owner, repo = url:match("github%.com/([^/]+)/([^/%.]+)")
   if owner then
-    return owner, repo
+    return { forge = "github", owner = owner, repo = repo }
   end
-  return nil, nil
+
+  -- GitLab SSH: git@gitlab.com:owner/repo.git (or self-hosted)
+  local host
+  host, owner, repo = url:match("git@([^:]*gitlab[^:]*):([^/]+)/([^/%.]+)")
+  if owner then
+    return { forge = "gitlab", owner = owner, repo = repo, host = host }
+  end
+  -- GitLab HTTPS: https://gitlab.com/owner/repo.git (or self-hosted)
+  host, owner, repo = url:match("https?://([^/]*gitlab[^/]*)/([^/]+)/([^/%.]+)")
+  if owner then
+    return { forge = "gitlab", owner = owner, repo = repo, host = host }
+  end
+
+  return nil
 end
 
 return M

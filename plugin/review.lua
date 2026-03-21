@@ -30,12 +30,7 @@ end, {
 })
 
 vim.api.nvim_create_user_command("ReviewToggle", function()
-  local st = require("review.state")
-  if st.get() then
-    require("review").close()
-  else
-    require("review").open({})
-  end
+  require("review").toggle()
 end, {
   desc = "Toggle code review panel",
 })

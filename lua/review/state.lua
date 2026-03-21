@@ -1,8 +1,21 @@
 --- Centralized session state singleton.
 local M = {}
 
+local storage -- lazy-loaded to avoid circular require at parse time
+
 ---@type ReviewSession|nil
 local session = nil
+
+--- Auto-incrementing note ID counter.
+local next_note_id = 1
+
+--- Get the storage module (lazy-loaded once).
+local function get_storage()
+  if not storage then
+    storage = require("review.storage")
+  end
+  return storage
+end
 
 ---@class ReviewCommit
 ---@field sha string
@@ -51,12 +64,15 @@ local session = nil
 ---@field new_lnum number|nil
 
 ---@class ReviewNote
+---@field id number
 ---@field file_path string
 ---@field line number
 ---@field end_line number|nil
 ---@field side string  "old"|"new"
 ---@field body string
 ---@field note_type string  "comment"|"suggestion"
+---@field status string  "draft"|"staged"|"published"
+---@field url string|nil  Link to the published comment (e.g. GitHub PR comment URL)
 
 ---@class ReviewComment
 ---@field file_path string
@@ -94,6 +110,18 @@ function M.create(mode, base_ref, files)
     draft_comments = {},
     ui_state = nil,
   }
+
+  local loaded = get_storage().load()
+  if #loaded > 0 then
+    session.notes = loaded
+    -- Advance the ID counter past any loaded note IDs
+    for _, note in ipairs(loaded) do
+      if note.id and note.id >= next_note_id then
+        next_note_id = note.id + 1
+      end
+    end
+  end
+
   return session
 end
 
@@ -105,6 +133,9 @@ end
 
 --- Destroy the current session.
 function M.destroy()
+  if session then
+    get_storage().save(session)
+  end
   session = nil
 end
 
@@ -187,18 +218,25 @@ end
 ---@param body string
 ---@param end_line number|nil
 ---@param side string|nil  "old"|"new", defaults to "new"
+---@param note_type string|nil  "comment"|"suggestion", defaults to "comment"
 function M.add_note(file_path, line, body, end_line, side, note_type)
   if not session then
     return
   end
-  table.insert(session.notes, {
+  local note = {
+    id = next_note_id,
     file_path = file_path,
     line = line,
     end_line = end_line,
     side = side or "new",
     body = body,
     note_type = note_type or "comment",
-  })
+    status = "draft",
+    url = nil,
+  }
+  next_note_id = next_note_id + 1
+  table.insert(session.notes, note)
+  get_storage().save(session)
 end
 
 --- Get notes for a specific file (or all notes if no path given).
@@ -225,7 +263,100 @@ end
 function M.remove_note(idx)
   if session and idx >= 1 and idx <= #session.notes then
     table.remove(session.notes, idx)
+    get_storage().save(session)
   end
+end
+
+--- Clear all notes.
+function M.clear_notes()
+  if session then
+    session.notes = {}
+    get_storage().save(session)
+  end
+end
+
+--- Toggle a note between draft and staged by its ID.
+---@param note_id number
+function M.toggle_staged(note_id)
+  if not session then
+    return
+  end
+  for _, note in ipairs(session.notes) do
+    if note.id == note_id then
+      if note.status == "draft" then
+        note.status = "staged"
+      elseif note.status == "staged" then
+        note.status = "draft"
+      end
+      -- Don't toggle published notes back
+      get_storage().save(session)
+      return
+    end
+  end
+end
+
+--- Mark all staged notes as published, optionally setting their URLs.
+---@param url_map table|nil  Map of note_id -> url string
+function M.publish_staged(url_map)
+  if not session then
+    return
+  end
+  url_map = url_map or {}
+  local count = 0
+  for _, note in ipairs(session.notes) do
+    if note.status == "staged" then
+      note.status = "published"
+      note.url = url_map[note.id] or nil
+      count = count + 1
+    end
+  end
+  if count > 0 then
+    get_storage().save(session)
+  end
+  return count
+end
+
+--- Find a note by its ID.
+---@param note_id number
+---@return ReviewNote|nil, number|nil
+function M.get_note_by_id(note_id)
+  if not session then
+    return nil, nil
+  end
+  for i, note in ipairs(session.notes) do
+    if note.id == note_id then
+      return note, i
+    end
+  end
+  return nil, nil
+end
+
+--- Find a note by file path, line, and side.
+---@param file_path string
+---@param line number
+---@param side string
+---@return ReviewNote|nil, number|nil
+function M.find_note_at(file_path, line, side)
+  if not session then
+    return nil, nil
+  end
+  for i, note in ipairs(session.notes) do
+    if note.file_path == file_path and note.line == line and note.side == side then
+      return note, i
+    end
+  end
+  return nil, nil
+end
+
+--- Update a note's body by index and persist.
+---@param idx number
+---@param body string
+function M.update_note_body(idx, body)
+  if not session or not session.notes[idx] then
+    return
+  end
+  session.notes[idx].body = body
+  get_storage().save(session)
 end
 
 --- Add a draft comment (PR mode).

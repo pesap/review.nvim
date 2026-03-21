@@ -5,7 +5,7 @@ local M = {}
 ---@class ReviewConfig
 local defaults = {
   view = "unified",
-  colorblind = false,
+  colorblind = true,
   keymaps = {
     add_note = "a",
     edit_note = "e",
@@ -99,6 +99,16 @@ end
 function M.close()
   local ui = require("review.ui")
   ui.close()
+end
+
+--- Toggle the review panel open/closed.
+function M.toggle()
+  local state = require("review.state")
+  if state.get() then
+    M.close()
+  else
+    M.open({})
+  end
 end
 
 --- Submit draft comments (PR mode only).
