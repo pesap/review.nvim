@@ -1,10 +1,12 @@
 --- All window/buffer/layout management for review.nvim
 local state = require("review.state")
 local diff_mod = require("review.diff")
+local forge = require("review.forge")
 
 local M = {}
 
--- Highlight group names
+local get_diff_win
+
 local HL = {
   add = "ReviewDiffAdd",
   del = "ReviewDiffDelete",
@@ -24,6 +26,10 @@ local HL = {
   note_published = "ReviewNotePublished",
   note_draft = "ReviewNoteDraft",
   note_ref = "ReviewNoteRef",
+  note_remote = "ReviewNoteRemote",
+  note_remote_resolved = "ReviewNoteRemoteResolved",
+  note_author = "ReviewNoteAuthor",
+  note_separator = "ReviewNoteSeparator",
 }
 
 --- Set up highlight groups (called once).
@@ -58,6 +64,29 @@ function M.setup_highlights(colorblind)
   set(0, HL.note_published, { fg = "#98c379" })
   set(0, HL.note_draft, { fg = "#e5c07b" })
   set(0, HL.note_ref, { fg = "#61afef", underline = true })
+  set(0, HL.note_remote, { fg = "#56b6c2" })
+  set(0, HL.note_remote_resolved, { fg = "#5c6370", italic = true })
+  set(0, HL.note_author, { fg = "#c678dd", italic = true })
+  set(0, HL.note_separator, { fg = "#3e4452" })
+end
+
+--- Compute adaptive float width based on terminal size.
+---@param scale number|nil  Width fraction for large screens (default 0.7)
+---@param cap number|nil  Max width (default 90)
+---@return number width, number col
+local function float_dimensions(scale, cap)
+  scale = scale or 0.7
+  cap = cap or 90
+  local cols = vim.o.columns
+  local w
+  if cols < 60 then
+    w = cols - 4
+  elseif cols < 100 then
+    w = math.floor(cols * 0.85)
+  else
+    w = math.min(math.floor(cols * scale), cap)
+  end
+  return w, math.floor((cols - w) / 2)
 end
 
 --- Create a scratch buffer with given options.
@@ -146,105 +175,134 @@ local function render_explorer(buf)
   local highlights = {}
   explorer_line_map = {}
 
-  -- Commits section (if any)
-  if #s.commits > 0 then
-    table.insert(lines, "  Commits")
-    table.insert(explorer_line_map, { type = "header" })
-    table.insert(highlights, { line = #lines - 1, hl = HL.file_header, col_start = 0, col_end = -1 })
-    table.insert(lines, string.rep("─", 30))
-    table.insert(explorer_line_map, { type = "separator" })
+  local active_files = state.active_files()
 
-    -- "All changes" entry
-    local all_prefix = s.current_commit_idx == nil and "▸ " or "  "
-    table.insert(lines, all_prefix .. "All changes (" .. #s.files .. " files)")
+  if #s.commits > 0 then
+    table.insert(lines, " Commits")
+    table.insert(explorer_line_map, { type = "header" })
+    table.insert(highlights, { line = #lines - 1, hl = HL.hunk_header, col_start = 0, col_end = -1 })
+
+    local all_active = s.current_commit_idx == nil
+    table.insert(lines, "  All changes")
     table.insert(explorer_line_map, { type = "commit", idx = nil })
-    local all_hl = s.current_commit_idx == nil and HL.commit_active or HL.commit
-    table.insert(highlights, { line = #lines - 1, hl = all_hl, col_start = 0, col_end = -1 })
+    if all_active then
+      table.insert(highlights, { line = #lines - 1, hl = HL.commit_active, col_start = 0, col_end = -1 })
+    end
 
     for i, commit in ipairs(s.commits) do
-      local prefix = (s.current_commit_idx == i) and "▸ " or "  "
-      local commit_line = string.format("%s%s %s", prefix, commit.short_sha, commit.message)
-      table.insert(lines, commit_line)
+      local is_active = (s.current_commit_idx == i)
+      local msg = commit.message
+      if #msg > 22 then
+        msg = msg:sub(1, 21) .. "\u{2026}"
+      end
+      local cline = string.format("  %s %s", commit.short_sha, msg)
+      table.insert(lines, cline)
       table.insert(explorer_line_map, { type = "commit", idx = i })
-      local c_line_idx = #lines - 1
-
-      local c_hl = (s.current_commit_idx == i) and HL.commit_active or HL.commit
-      table.insert(highlights, { line = c_line_idx, hl = c_hl, col_start = 0, col_end = -1 })
-
-      -- Author on same line (after message)
-      local author_text = " — " .. commit.author
-      -- Update the line to include author
-      lines[#lines] = lines[#lines] .. author_text
-      local author_start = #commit_line
-      table.insert(highlights, { line = c_line_idx, hl = HL.commit_author, col_start = author_start, col_end = -1 })
+      local cli = #lines - 1
+      if is_active then
+        table.insert(highlights, { line = cli, hl = HL.commit_active, col_start = 0, col_end = -1 })
+      else
+        table.insert(highlights, { line = cli, hl = HL.commit, col_start = 2, col_end = 2 + #commit.short_sha })
+        table.insert(highlights, {
+          line = cli,
+          hl = HL.commit_author,
+          col_start = 2 + #commit.short_sha + 1,
+          col_end = -1,
+        })
+      end
     end
 
     table.insert(lines, "")
     table.insert(explorer_line_map, { type = "separator" })
   end
 
-  -- Files section
-  table.insert(lines, "  Files")
+  table.insert(lines, " Files")
   table.insert(explorer_line_map, { type = "header" })
-  table.insert(highlights, { line = #lines - 1, hl = HL.file_header, col_start = 0, col_end = -1 })
-  table.insert(lines, string.rep("─", 30))
-  table.insert(explorer_line_map, { type = "separator" })
+  table.insert(highlights, { line = #lines - 1, hl = HL.hunk_header, col_start = 0, col_end = -1 })
 
-  local active_files = state.active_files()
   for i, file in ipairs(active_files) do
-    local status_char = file.status
-    local icon = " "
-    if status_char == "M" then
-      icon = "~"
-    elseif status_char == "A" then
-      icon = "+"
-    elseif status_char == "D" then
-      icon = "-"
-    elseif status_char == "R" then
-      icon = "→"
+    local is_active = (i == s.current_file_idx)
+
+    local fadd, fdel = 0, 0
+    for _, hunk in ipairs(file.hunks) do
+      for _, dl in ipairs(hunk.lines) do
+        if dl.type == "add" then
+          fadd = fadd + 1
+        elseif dl.type == "del" then
+          fdel = fdel + 1
+        end
+      end
     end
 
     local file_notes = state.get_notes(file.path)
-    local note_count = #file_notes
-    local note_badge = ""
-    if note_count > 0 then
-      local staged_count = 0
+    local note_count = 0
+    if #file_notes > 0 then
+      local _, _, n2d, o2d = diff_mod.build_line_map(file.hunks)
       for _, n in ipairs(file_notes) do
-        if n.status == "staged" then
-          staged_count = staged_count + 1
+        local map = (n.side == "old") and o2d or n2d
+        if type(n.line) == "number" and map[n.line] ~= nil then
+          note_count = note_count + 1
         end
       end
-      if staged_count > 0 then
-        note_badge = string.format(" [%d/%d]", staged_count, note_count)
-      else
-        note_badge = " [" .. note_count .. "]"
-      end
     end
 
-    local line = string.format("   %s %s%s", icon, file.path, note_badge)
-    table.insert(lines, line)
-    table.insert(explorer_line_map, { type = "file", idx = i })
+    local fname = file.path:match("([^/]+)$") or file.path
 
-    local is_active = (i == s.current_file_idx)
-    local line_idx = #lines - 1
+    local status_icon
+    if file.status == "A" then
+      status_icon = "+"
+    elseif file.status == "D" then
+      status_icon = "-"
+    elseif file.status == "R" then
+      status_icon = "~"
+    else
+      status_icon = "~"
+    end
+
+    local stats = string.format("+%d -%d", fadd, fdel)
+    local badge = note_count > 0 and string.format(" (%d)", note_count) or ""
+    local line1 = string.format("  %s %s  %s%s", status_icon, fname, stats, badge)
+    table.insert(lines, line1)
+    table.insert(explorer_line_map, { type = "file", idx = i })
+    local li = #lines - 1
 
     local status_hl = HL.status_m
-    if status_char == "A" then
+    if file.status == "A" then
       status_hl = HL.status_a
-    elseif status_char == "D" then
+    elseif file.status == "D" then
       status_hl = HL.status_d
     end
-    table.insert(highlights, { line = line_idx, hl = status_hl, col_start = 3, col_end = 4 })
+    table.insert(highlights, { line = li, hl = status_hl, col_start = 2, col_end = 3 })
 
+    local fname_start = 4
     if is_active then
-      table.insert(highlights, { line = line_idx, hl = HL.explorer_active, col_start = 5, col_end = -1 })
-    else
-      table.insert(highlights, { line = line_idx, hl = HL.explorer_file, col_start = 5, col_end = -1 })
+      table.insert(
+        highlights,
+        { line = li, hl = HL.explorer_active, col_start = fname_start, col_end = fname_start + #fname }
+      )
+    end
+
+    local stats_start = fname_start + #fname + 2
+    local plus_str = "+" .. tostring(fadd)
+    local minus_str = "-" .. tostring(fdel)
+    table.insert(
+      highlights,
+      { line = li, hl = HL.status_a, col_start = stats_start, col_end = stats_start + #plus_str }
+    )
+    local minus_start = stats_start + #plus_str + 1
+    table.insert(
+      highlights,
+      { line = li, hl = HL.status_d, col_start = minus_start, col_end = minus_start + #minus_str }
+    )
+
+    if note_count > 0 then
+      local badge_start = minus_start + #minus_str
+      table.insert(highlights, { line = li, hl = HL.note_sign, col_start = badge_start, col_end = -1 })
     end
   end
 
   if #active_files == 0 then
-    table.insert(lines, "   (no files)")
+    table.insert(lines, "  (no files)")
     table.insert(explorer_line_map, { type = "separator" })
   end
 
@@ -287,7 +345,6 @@ local function build_diff_display(file)
   local highlights = {}
 
   for _, hunk in ipairs(file.hunks) do
-    -- Hunk header
     table.insert(lines, hunk.header)
     table.insert(highlights, {
       line = #lines - 1,
@@ -389,7 +446,6 @@ local function render_diff(buf)
     vim.api.nvim_buf_add_highlight(buf, ns, h.hl, h.line, h.col_start, h.col_end)
   end
 
-  -- Show note signs
   M.render_note_signs(buf)
 end
 
@@ -409,10 +465,12 @@ function M.render_note_signs(buf)
     return
   end
 
-  -- Build line map to find display positions
   local _, _, new_to_display, old_to_display = diff_mod.build_line_map(file.hunks)
 
   for _, note in ipairs(notes) do
+    if not note.line then
+      goto skip_sign
+    end
     local display_line
     if note.side == "old" then
       display_line = old_to_display[note.line]
@@ -421,12 +479,132 @@ function M.render_note_signs(buf)
     end
 
     if display_line then
+      local sign, hl
+      if note.status == "remote" and note.resolved then
+        sign, hl = "~", HL.note_remote_resolved
+      elseif note.status == "remote" then
+        sign, hl = "R", HL.note_remote
+      else
+        sign, hl = "N", HL.note_sign
+      end
       vim.api.nvim_buf_set_extmark(buf, ns, display_line - 1, 0, {
-        sign_text = "N",
-        sign_hl_group = HL.note_sign,
+        sign_text = sign,
+        sign_hl_group = hl,
         priority = 100,
       })
     end
+    ::skip_sign::
+  end
+end
+
+--- Show/hide inline comment preview when cursor lands on a line with notes.
+--- Uses virt_lines to render the conversation below the diff line.
+local inline_ns = vim.api.nvim_create_namespace("review_inline")
+local inline_last_buf = nil
+local inline_last_note = nil
+
+--- Clear any active inline preview.
+local function clear_inline_preview()
+  if inline_last_buf and vim.api.nvim_buf_is_valid(inline_last_buf) then
+    vim.api.nvim_buf_clear_namespace(inline_last_buf, inline_ns, 0, -1)
+  end
+  inline_last_buf = nil
+  inline_last_note = nil
+end
+
+--- Show inline comment preview for a note at the given display line.
+---@param buf number
+---@param display_line number  1-indexed
+---@param note ReviewNote
+local function show_inline_preview(buf, display_line, note)
+  if not note.replies or #note.replies == 0 then
+    -- For local notes just show the body
+    local body = (note.body or ""):match("^([^\n]*)") or ""
+    if #body > 60 then
+      body = body:sub(1, 57) .. "..."
+    end
+    local prefix = note.author and ("@" .. note.author .. ": ") or ""
+    vim.api.nvim_buf_set_extmark(buf, inline_ns, display_line - 1, 0, {
+      virt_lines = {
+        { { "  \u{2502} " .. prefix .. body, HL.note_author } },
+      },
+      virt_lines_above = false,
+    })
+    return
+  end
+
+  -- Build virt_lines for each reply (compact: one line per reply)
+  local vlines = {}
+  local max_replies = 5
+  for i, reply in ipairs(note.replies) do
+    if i > max_replies then
+      table.insert(vlines, {
+        { string.format("  \u{2502} ... and %d more", #note.replies - max_replies), HL.hunk_header },
+      })
+      break
+    end
+    local body = (reply.body or ""):match("^([^\n]*)") or ""
+    if #body > 55 then
+      body = body:sub(1, 52) .. "..."
+    end
+    local line_hl = (i == 1) and HL.note_remote or HL.note_author
+    table.insert(vlines, {
+      { string.format("  \u{2502} @%s: %s", reply.author or "?", body), line_hl },
+    })
+  end
+
+  -- Status line
+  local status = note.resolved and "resolved" or "open"
+  local reply_count = #note.replies
+  local footer = string.format("  \u{2514} %s \u{00B7} %d replies \u{00B7} <CR> open thread", status, reply_count)
+  table.insert(vlines, { { footer, HL.hunk_header } })
+
+  vim.api.nvim_buf_set_extmark(buf, inline_ns, display_line - 1, 0, {
+    virt_lines = vlines,
+    virt_lines_above = false,
+  })
+end
+
+--- Update inline preview based on cursor position.
+---@param buf number
+function M.update_inline_preview(buf)
+  local file = state.active_current_file()
+  if not file then
+    clear_inline_preview()
+    return
+  end
+
+  local win = get_diff_win()
+  if not win then
+    clear_inline_preview()
+    return
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local display_line = cursor[1]
+
+  local dn, do_ = diff_mod.build_line_map(file.hunks)
+  local new_lnum = dn[display_line]
+  local old_lnum = do_[display_line]
+
+  local target_note = nil
+  if new_lnum then
+    target_note = state.find_note_at(file.path, new_lnum, "new")
+  end
+  if not target_note and old_lnum then
+    target_note = state.find_note_at(file.path, old_lnum, "old")
+  end
+
+  if target_note and inline_last_note and target_note.id == inline_last_note.id then
+    return
+  end
+
+  clear_inline_preview()
+
+  if target_note then
+    inline_last_buf = buf
+    inline_last_note = target_note
+    show_inline_preview(buf, display_line, target_note)
   end
 end
 
@@ -444,13 +622,11 @@ local function build_split_display(file)
   local new_hl = {}
 
   for _, hunk in ipairs(file.hunks) do
-    -- Hunk header on both sides
     table.insert(old_lines, hunk.header)
     table.insert(old_hl, { line = #old_lines - 1, hl = HL.hunk_header, col_start = 0, col_end = -1 })
     table.insert(new_lines, hunk.header)
     table.insert(new_hl, { line = #new_lines - 1, hl = HL.hunk_header, col_start = 0, col_end = -1 })
 
-    -- Pre-compute word diff pairs
     local word_diff_pairs = diff_mod.pair_changed_lines(hunk)
     local pair_map = {}
     for _, pair in ipairs(word_diff_pairs) do
@@ -471,20 +647,17 @@ local function build_split_display(file)
         table.insert(new_lines, string.format("%s│ │%s", new_num, dl.text))
         i = i + 1
       elseif dl.type == "del" then
-        -- Collect consecutive del lines
         local dels = {}
         while i <= #hunk.lines and hunk.lines[i].type == "del" do
           table.insert(dels, { idx = i, line = hunk.lines[i] })
           i = i + 1
         end
-        -- Collect consecutive add lines
         local adds = {}
         while i <= #hunk.lines and hunk.lines[i].type == "add" do
           table.insert(adds, { idx = i, line = hunk.lines[i] })
           i = i + 1
         end
 
-        -- Pre-compute word diffs for paired lines (once per pair)
         local num_pairs = math.min(#dels, #adds)
         local pair_diffs = {}
         for j = 1, num_pairs do
@@ -571,7 +744,6 @@ local function render_split(ui_state)
 
   local old_lines, old_hl, new_lines, new_hl = build_split_display(file)
 
-  -- Old side (reuse diff_buf)
   vim.bo[ui_state.diff_buf].modifiable = true
   vim.api.nvim_buf_set_lines(ui_state.diff_buf, 0, -1, false, old_lines)
   vim.bo[ui_state.diff_buf].modifiable = false
@@ -582,7 +754,6 @@ local function render_split(ui_state)
     vim.api.nvim_buf_add_highlight(ui_state.diff_buf, ns_old, h.hl, h.line, h.col_start, h.col_end)
   end
 
-  -- New side
   vim.bo[ui_state.split_buf].modifiable = true
   vim.api.nvim_buf_set_lines(ui_state.split_buf, 0, -1, false, new_lines)
   vim.bo[ui_state.split_buf].modifiable = false
@@ -593,7 +764,6 @@ local function render_split(ui_state)
     vim.api.nvim_buf_add_highlight(ui_state.split_buf, ns_new, h.hl, h.line, h.col_start, h.col_end)
   end
 
-  -- Enable scrollbind on both windows
   vim.wo[ui_state.diff_win].scrollbind = true
   vim.wo[ui_state.split_win].scrollbind = true
   vim.cmd("syncbind")
@@ -610,7 +780,6 @@ function M.toggle_split()
     -- Switch to split mode
     ui_state.view_mode = "split"
 
-    -- Create the split buffer and window
     local split_buf = create_buf("review://diff-new", { filetype = "review-diff" })
 
     -- Focus the diff window and split it
@@ -630,25 +799,20 @@ function M.toggle_split()
     ui_state.split_buf = split_buf
     ui_state.split_win = split_win
 
-    -- Set up keymaps on the new buffer too
     setup_diff_keymaps(split_buf)
 
     render_split(ui_state)
   else
-    -- Switch back to unified mode
     ui_state.view_mode = "unified"
 
-    -- Disable scrollbind
     vim.wo[ui_state.diff_win].scrollbind = false
 
-    -- Close the split window/buffer
     if ui_state.split_win and vim.api.nvim_win_is_valid(ui_state.split_win) then
       vim.api.nvim_win_close(ui_state.split_win, true)
     end
     ui_state.split_buf = nil
     ui_state.split_win = nil
 
-    -- Re-render unified diff
     render_diff(ui_state.diff_buf)
   end
 end
@@ -688,7 +852,6 @@ end
 local function setup_explorer_keymaps(buf)
   local opts = { buffer = buf, noremap = true, silent = true }
 
-  -- Enter: select commit or file under cursor
   vim.keymap.set("n", "<CR>", function()
     if not explorer_line_map then
       return
@@ -703,7 +866,6 @@ local function setup_explorer_keymaps(buf)
       M.select_commit(entry.idx)
     elseif entry.type == "file" then
       M.select_file(entry.idx)
-      -- Auto-jump to diff window
       local ui_state = state.get_ui()
       if ui_state and vim.api.nvim_win_is_valid(ui_state.diff_win) then
         vim.api.nvim_set_current_win(ui_state.diff_win)
@@ -724,17 +886,15 @@ end
 
 --- Get the diff window, preferring the current window if it's a diff window.
 ---@return number|nil win
-local function get_diff_win()
+get_diff_win = function()
   local ui_state = state.get_ui()
   if not ui_state then
     return nil
   end
-  -- Check if current window is the diff or split window
   local cur_win = vim.api.nvim_get_current_win()
   if cur_win == ui_state.diff_win or cur_win == ui_state.split_win then
     return cur_win
   end
-  -- Default to diff_win
   if ui_state.diff_win and vim.api.nvim_win_is_valid(ui_state.diff_win) then
     return ui_state.diff_win
   end
@@ -784,7 +944,6 @@ local function setup_diff_keymaps(buf)
     local cursor = vim.api.nvim_win_get_cursor(0)
     local current_line = cursor[1]
 
-    -- Find the next hunk header line
     local display_line = 0
     for _, hunk in ipairs(file.hunks) do
       display_line = display_line + 1 -- hunk header
@@ -804,7 +963,6 @@ local function setup_diff_keymaps(buf)
     local cursor = vim.api.nvim_win_get_cursor(0)
     local current_line = cursor[1]
 
-    -- Collect all hunk header positions
     local hunk_positions = {}
     local display_line = 0
     for _, hunk in ipairs(file.hunks) do
@@ -813,7 +971,6 @@ local function setup_diff_keymaps(buf)
       display_line = display_line + #hunk.lines
     end
 
-    -- Find the last header before current line
     for i = #hunk_positions, 1, -1 do
       if hunk_positions[i] < current_line then
         vim.api.nvim_win_set_cursor(0, { hunk_positions[i], 0 })
@@ -882,6 +1039,40 @@ local function setup_diff_keymaps(buf)
     local el = vim.fn.line(".")
     M.open_note_float({ range = true, suggestion = true, start_line = sl, end_line = el })
   end, vopts)
+
+  -- <CR>: open thread view for the note under cursor
+  vim.keymap.set("n", "<CR>", function()
+    local file = state.active_current_file()
+    if not file then
+      return
+    end
+    local line_info = M.get_cursor_line_info()
+    if not line_info then
+      return
+    end
+    local target_line = line_info.new_lnum or line_info.old_lnum
+    local side = line_info.new_lnum and "new" or "old"
+    if not target_line then
+      return
+    end
+    local note = state.find_note_at(file.path, target_line, side)
+    if not note then
+      return
+    end
+    if note.status == "remote" and note.replies and #note.replies > 0 then
+      clear_inline_preview()
+      M.open_thread_view(note)
+    elseif note.status ~= "remote" then
+      M.edit_note_at_cursor()
+    end
+  end, opts)
+
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+      M.update_inline_preview(buf)
+    end,
+  })
 end
 
 --- Open the two-panel review layout.
@@ -895,15 +1086,12 @@ function M.open()
   local config = require("review").config
   M.setup_highlights(config.colorblind)
 
-  -- Create a new tab for the review
   vim.cmd("tabnew")
   local tab = vim.api.nvim_get_current_tabpage()
 
-  -- Create buffers
   local explorer_buf = create_buf("review://explorer", { filetype = "review-explorer" })
   local diff_buf = create_buf("review://diff", { filetype = "review-diff" })
 
-  -- Set up layout: explorer on left (30 cols), diff on right
   vim.api.nvim_set_current_buf(explorer_buf)
   vim.cmd("vsplit")
   vim.cmd("wincmd l")
@@ -914,20 +1102,18 @@ function M.open()
 
   local explorer_win = vim.api.nvim_get_current_win()
 
-  -- Move to diff window
   vim.cmd("wincmd l")
   local diff_win = vim.api.nvim_get_current_win()
 
-  -- Window options
   for _, win in ipairs({ explorer_win, diff_win }) do
     vim.wo[win].number = false
     vim.wo[win].relativenumber = false
     vim.wo[win].signcolumn = "yes"
     vim.wo[win].wrap = false
-    vim.wo[win].cursorline = true
   end
+  vim.wo[diff_win].cursorline = true
+  vim.wo[explorer_win].cursorline = false
 
-  -- Store UI state
   state.set_ui({
     explorer_buf = explorer_buf,
     explorer_win = explorer_win,
@@ -937,25 +1123,30 @@ function M.open()
     view_mode = config.view or "unified",
   })
 
-  -- Set up keymaps
   setup_explorer_keymaps(explorer_buf)
   setup_diff_keymaps(diff_buf)
 
-  -- Render initial content
   render_explorer(explorer_buf)
   render_diff(diff_buf)
 
-  -- Focus the explorer
   vim.api.nvim_set_current_win(explorer_win)
-  -- Move cursor to first file (line 3, after header)
   if #s.files > 0 then
     vim.api.nvim_win_set_cursor(explorer_win, { 3, 0 })
   end
 
-  -- Auto-close when tab is closed
+  for _, buf in ipairs({ explorer_buf, diff_buf }) do
+    vim.api.nvim_create_autocmd("QuitPre", {
+      buffer = buf,
+      callback = function()
+        -- Close the entire review, then abort the :q so Neovim doesn't
+        -- try to close the now-gone buffer
+        M.close()
+      end,
+    })
+  end
+
   vim.api.nvim_create_autocmd("TabClosed", {
     callback = function(ev)
-      -- Check if our tab still exists
       local tabs = vim.api.nvim_list_tabpages()
       local found = false
       for _, t in ipairs(tabs) do
@@ -974,18 +1165,26 @@ end
 
 --- Close the review layout.
 function M.close()
+  clear_inline_preview()
+
   local ui = state.get_ui()
   if ui and ui.tab then
-    -- Close the tab (this wipes the buffers too since bufhidden=wipe)
     local tabs = vim.api.nvim_list_tabpages()
-    for _, t in ipairs(tabs) do
-      if t == ui.tab then
-        -- Switch to another tab first if this is the current one
-        if vim.api.nvim_get_current_tabpage() == ui.tab then
-          vim.cmd("tabprevious")
+    if #tabs <= 1 then
+      for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
+        if buf and vim.api.nvim_buf_is_valid(buf) then
+          vim.api.nvim_buf_delete(buf, { force = true })
         end
-        vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
-        break
+      end
+    else
+      for _, t in ipairs(tabs) do
+        if t == ui.tab then
+          if vim.api.nvim_get_current_tabpage() == ui.tab then
+            vim.cmd("tabprevious")
+          end
+          vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
+          break
+        end
       end
     end
   end
@@ -1005,7 +1204,6 @@ function M.open_note_float(opts)
   local target_line, end_line, side
 
   if opts.range then
-    -- Use display line numbers passed directly from visual mode keymap
     local sl = opts.start_line or vim.fn.line("'<")
     local el = opts.end_line or vim.fn.line("'>")
     if sl > el then
@@ -1019,7 +1217,6 @@ function M.open_note_float(opts)
       side = dn[sl] and "new" or "old"
     end
   else
-    -- Use cursor position
     local line_info = M.get_cursor_line_info()
     if line_info then
       target_line = line_info.new_lnum or line_info.old_lnum
@@ -1032,16 +1229,13 @@ function M.open_note_float(opts)
     return
   end
 
-  -- Create floating window
-  local width = math.floor(vim.o.columns * 0.5)
-  local height = 10
+  local width, col = float_dimensions(0.5, 80)
+  local height = math.min(10, vim.o.lines - 4)
   local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
 
   local is_suggestion = opts.suggestion or false
   local note_type = is_suggestion and "suggestion" or "comment"
 
-  -- Editable note body with context in the title
   local note_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_name(note_buf, "review://note-" .. note_buf)
 
@@ -1055,7 +1249,6 @@ function M.open_note_float(opts)
     kind_label
   )
 
-  -- Pre-populate suggestion template with selected diff lines
   if is_suggestion then
     local selected_text = {}
     local ui_state = state.get_ui()
@@ -1067,7 +1260,6 @@ function M.open_note_float(opts)
       end
       local buf_lines = vim.api.nvim_buf_get_lines(ui_state.diff_buf, sl_display - 1, el_display, false)
       for _, l in ipairs(buf_lines) do
-        -- Strip the gutter (line numbers + separator), keep just the code
         local code = l:match("│.│(.*)$") or l
         table.insert(selected_text, code)
       end
@@ -1095,9 +1287,7 @@ function M.open_note_float(opts)
 
   vim.bo[note_buf].bufhidden = "wipe"
 
-  -- Start in insert mode (at end for suggestions so user can edit the code)
   if is_suggestion then
-    -- Place cursor inside the suggestion block
     local line_count = vim.api.nvim_buf_line_count(note_buf)
     vim.api.nvim_win_set_cursor(note_win, { math.max(1, line_count - 2), 0 })
   end
@@ -1144,10 +1334,14 @@ function M.edit_note_at_cursor()
     return
   end
 
-  local width = math.floor(vim.o.columns * 0.5)
-  local height = 10
+  if note.status == "remote" then
+    M.open_thread_view(note)
+    return
+  end
+
+  local width, col = float_dimensions(0.5, 80)
+  local height = math.min(10, vim.o.lines - 4)
   local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
 
   local note_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[note_buf].filetype = "markdown"
@@ -1196,9 +1390,13 @@ function M.delete_note_at_cursor()
     return
   end
 
-  local _, note_idx = state.find_note_at(file.path, target_line, side)
-  if not note_idx then
+  local note, note_idx = state.find_note_at(file.path, target_line, side)
+  if not note then
     vim.notify("No note on this line", vim.log.levels.INFO)
+    return
+  end
+  if note.status == "remote" then
+    vim.notify("Cannot delete remote comments", vim.log.levels.WARN)
     return
   end
 
@@ -1243,7 +1441,6 @@ function M.jump_to_note(direction)
   local cur_fi = s.current_file_idx
   local cur_line = vim.api.nvim_win_get_cursor(win)[1]
 
-  -- Build flat list of jumpable notes, computing line maps once per file
   local entries = {}
   for fi, file in ipairs(files) do
     local file_notes = state.get_notes(file.path)
@@ -1275,7 +1472,6 @@ function M.jump_to_note(direction)
     return a.dl < b.dl
   end)
 
-  -- Check if cursor is currently inside a note's range
   local on_entry_idx = nil
   for i, e in ipairs(entries) do
     if e.fi == cur_fi and cur_line >= e.dl and cur_line <= e.dl_end then
@@ -1286,14 +1482,12 @@ function M.jump_to_note(direction)
 
   local target
   if on_entry_idx then
-    -- We're on a note — move to the next/prev different note
     if direction > 0 then
       target = entries[on_entry_idx < #entries and on_entry_idx + 1 or 1]
     else
       target = entries[on_entry_idx > 1 and on_entry_idx - 1 or #entries]
     end
   else
-    -- We're not on a note — find closest in the given direction
     if direction > 0 then
       for _, e in ipairs(entries) do
         if e.fi > cur_fi or (e.fi == cur_fi and e.dl >= cur_line) then
@@ -1318,19 +1512,370 @@ function M.jump_to_note(direction)
     return
   end
 
-  -- Jump
   if target.fi ~= cur_fi then
     state.set_file(target.fi)
     M.refresh()
   end
 
-  -- Resolve display line fresh (after potential re-render)
   local target_file = files[target.fi]
   local dl = note_to_display_line(target.note, target_file.hunks)
   if dl then
     vim.api.nvim_set_current_win(win)
     vim.api.nvim_win_set_cursor(win, { dl, 0 })
   end
+end
+
+--- Open a thread view for a remote note, showing the full conversation.
+---@param note ReviewNote
+function M.open_thread_view(note)
+  if not note.replies or #note.replies == 0 then
+    vim.notify("No conversation on this comment", vim.log.levels.INFO)
+    return
+  end
+
+  local width, col_offset = float_dimensions()
+
+  local lines = {}
+  local highlight_rows = {}
+  local line_to_reply = {} -- maps display line -> reply index
+
+  -- Header: location + status
+  local location = string.format("%s:%s", note.file_path, tostring(note.line or "?"))
+  local status_tag = note.resolved and " [resolved]" or " [open]"
+  table.insert(lines, " " .. location .. status_tag)
+  highlight_rows[#lines] = { hl = note.resolved and HL.note_remote_resolved or HL.file_header }
+
+  table.insert(lines, string.rep("\u{2500}", width - 2))
+  highlight_rows[#lines] = { hl = HL.note_separator }
+
+  for idx, reply in ipairs(note.replies) do
+    table.insert(lines, "")
+    line_to_reply[#lines] = idx
+
+    local author_str = " @" .. reply.author
+    if reply.created_at then
+      local date = reply.created_at:match("^(%d%d%d%d%-%d%d%-%d%d)")
+      if date then
+        author_str = author_str .. " \u{00B7} " .. date
+      end
+    end
+    table.insert(lines, author_str)
+    highlight_rows[#lines] = { hl = HL.note_author }
+    line_to_reply[#lines] = idx
+
+    local body_lines = vim.split(reply.body or "", "\n")
+    for _, body_line in ipairs(body_lines) do
+      local indent = "   "
+      local wrap_at = math.max(width - #indent - 2, 10)
+      if #body_line <= wrap_at then
+        table.insert(lines, indent .. body_line)
+      else
+        local pos = 1
+        while pos <= #body_line do
+          if pos + wrap_at - 1 >= #body_line then
+            table.insert(lines, indent .. body_line:sub(pos))
+            break
+          end
+          local chunk = body_line:sub(pos, pos + wrap_at - 1)
+          local last_space = chunk:match(".*()%s")
+          if last_space and last_space > 1 then
+            table.insert(lines, indent .. body_line:sub(pos, pos + last_space - 2))
+            pos = pos + last_space
+          else
+            table.insert(lines, indent .. chunk)
+            pos = pos + wrap_at
+          end
+        end
+      end
+      line_to_reply[#lines] = idx
+    end
+
+    if idx < #note.replies then
+      table.insert(lines, "")
+    end
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, string.rep("\u{2500}", width - 2))
+  highlight_rows[#lines] = { hl = HL.note_separator }
+  table.insert(lines, " e edit  d delete  r reply  x resolve  b browse  q close")
+  highlight_rows[#lines] = { hl = HL.hunk_header }
+
+  local height = math.min(#lines, math.floor(vim.o.lines * 0.75))
+  local row = math.floor((vim.o.lines - height) / 2)
+  local col = col_offset
+
+  local thread_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[thread_buf].buftype = "nofile"
+  vim.bo[thread_buf].bufhidden = "wipe"
+  vim.bo[thread_buf].filetype = "markdown"
+  vim.api.nvim_buf_set_lines(thread_buf, 0, -1, false, lines)
+  vim.bo[thread_buf].modifiable = false
+
+  local thread_win = vim.api.nvim_open_win(thread_buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Thread  ",
+    title_pos = "center",
+  })
+
+  vim.wo[thread_win].wrap = true
+  vim.wo[thread_win].conceallevel = 2
+  vim.wo[thread_win].concealcursor = "n"
+
+  pcall(vim.treesitter.start, thread_buf, "markdown")
+
+  local ns = vim.api.nvim_create_namespace("review_thread")
+  for i, hr in pairs(highlight_rows) do
+    vim.api.nvim_buf_add_highlight(thread_buf, ns, hr.hl, i - 1, 0, -1)
+  end
+
+  local buf_opts = { buffer = thread_buf, noremap = true, silent = true }
+
+  vim.keymap.set("n", "b", function()
+    if note.url then
+      vim.ui.open(note.url)
+    else
+      vim.notify("No URL for this thread", vim.log.levels.INFO)
+    end
+  end, buf_opts)
+
+  vim.keymap.set("n", "q", function()
+    vim.api.nvim_win_close(thread_win, true)
+    M.open_notes_list()
+  end, buf_opts)
+  vim.keymap.set("n", "<Esc>", function()
+    vim.api.nvim_win_close(thread_win, true)
+    M.open_notes_list()
+  end, buf_opts)
+
+  vim.keymap.set("n", "e", function()
+    local cursor = vim.api.nvim_win_get_cursor(thread_win)
+    local reply_idx = line_to_reply[cursor[1]]
+    if not reply_idx then
+      vim.notify("No comment under cursor", vim.log.levels.INFO)
+      return
+    end
+
+    local reply = note.replies[reply_idx]
+    if not reply or not reply.remote_id then
+      vim.notify("Cannot edit this comment", vim.log.levels.WARN)
+      return
+    end
+
+    local me = forge.current_user()
+    if me and reply.author ~= me and reply.author ~= "you" then
+      vim.notify("Can only edit your own comments (@" .. reply.author .. " is not you)", vim.log.levels.WARN)
+      return
+    end
+
+    vim.api.nvim_win_close(thread_win, true)
+
+    local edit_buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[edit_buf].filetype = "markdown"
+    vim.api.nvim_buf_set_name(edit_buf, "review://edit-comment-" .. edit_buf)
+    vim.bo[edit_buf].bufhidden = "wipe"
+
+    local edit_lines = vim.split(reply.body or "", "\n")
+    vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, edit_lines)
+
+    local ew, ec = float_dimensions(0.6, 70)
+    local eh = math.min(12, vim.o.lines - 4)
+    local er = math.floor((vim.o.lines - eh) / 2)
+
+    local edit_win = vim.api.nvim_open_win(edit_buf, true, {
+      relative = "editor",
+      width = ew,
+      height = eh,
+      row = er,
+      col = ec,
+      style = "minimal",
+      border = "rounded",
+      title = " Edit Comment  <C-s> save  q cancel ",
+      title_pos = "center",
+    })
+
+    vim.cmd("startinsert!")
+
+    setup_note_float_keymaps(edit_buf, edit_win, function()
+      local new_lines = vim.api.nvim_buf_get_lines(edit_buf, 0, -1, false)
+      local new_body = table.concat(new_lines, "\n")
+      if not new_body:match("%S") then
+        return
+      end
+
+      local info = state.get_forge_info()
+      if not info then
+        vim.notify("No PR/MR detected — cannot edit", vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("Updating comment...", vim.log.levels.INFO)
+      local url, err = forge.edit_comment(info, reply.remote_id, new_body)
+      if err then
+        vim.notify("Edit failed: " .. err, vim.log.levels.ERROR)
+      else
+        vim.notify("Comment updated" .. (url and (": " .. url) or ""), vim.log.levels.INFO)
+        reply.body = new_body
+      end
+    end, function()
+      vim.api.nvim_win_close(edit_win, true)
+      M.open_thread_view(note)
+    end)
+  end, buf_opts)
+
+  vim.keymap.set("n", "d", function()
+    local cursor = vim.api.nvim_win_get_cursor(thread_win)
+    local reply_idx = line_to_reply[cursor[1]]
+    if not reply_idx then
+      vim.notify("No comment under cursor", vim.log.levels.INFO)
+      return
+    end
+
+    local reply = note.replies[reply_idx]
+    if not reply or not reply.remote_id then
+      vim.notify("Cannot delete this comment", vim.log.levels.WARN)
+      return
+    end
+
+    local me = forge.current_user()
+    if me and reply.author ~= me and reply.author ~= "you" then
+      vim.notify("Can only delete your own comments", vim.log.levels.WARN)
+      return
+    end
+
+    vim.ui.select({ "Yes", "No" }, { prompt = "Delete this comment?" }, function(choice)
+      if choice ~= "Yes" then
+        return
+      end
+
+      local info = state.get_forge_info()
+      if not info then
+        vim.notify("No PR/MR detected", vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("Deleting comment...", vim.log.levels.INFO)
+      local ok, err = forge.delete_comment(info, reply.remote_id)
+      if not ok then
+        vim.notify("Delete failed: " .. (err or "unknown"), vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("Comment deleted", vim.log.levels.INFO)
+      table.remove(note.replies, reply_idx)
+
+      if vim.api.nvim_win_is_valid(thread_win) then
+        vim.api.nvim_win_close(thread_win, true)
+      end
+      if #note.replies > 0 then
+        M.open_thread_view(note)
+      else
+        M.open_notes_list()
+      end
+    end)
+  end, buf_opts)
+
+  vim.keymap.set("n", "x", function()
+    local info = state.get_forge_info()
+    if not info then
+      vim.notify("No PR/MR detected", vim.log.levels.ERROR)
+      return
+    end
+
+    local new_resolved = not note.resolved
+    local action = new_resolved and "Resolve" or "Unresolve"
+
+    vim.ui.select({ "Yes", "No" }, { prompt = action .. " this thread?" }, function(choice)
+      if choice ~= "Yes" then
+        return
+      end
+
+      vim.notify(action .. " thread...", vim.log.levels.INFO)
+      local ok, err = forge.resolve_thread(info, note, new_resolved)
+      if not ok then
+        vim.notify(action .. " failed: " .. (err or "unknown"), vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("Thread " .. (new_resolved and "resolved" or "reopened"), vim.log.levels.INFO)
+      note.resolved = new_resolved
+
+      if vim.api.nvim_win_is_valid(thread_win) then
+        vim.api.nvim_win_close(thread_win, true)
+      end
+      M.open_thread_view(note)
+    end)
+  end, buf_opts)
+
+  vim.keymap.set("n", "r", function()
+    vim.api.nvim_win_close(thread_win, true)
+
+    local reply_buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[reply_buf].filetype = "markdown"
+    vim.api.nvim_buf_set_name(reply_buf, "review://reply-" .. reply_buf)
+    vim.bo[reply_buf].bufhidden = "wipe"
+
+    local rw, rc = float_dimensions(0.6, 70)
+    local rh = math.min(8, vim.o.lines - 4)
+    local rr = math.floor((vim.o.lines - rh) / 2)
+
+    local reply_win = vim.api.nvim_open_win(reply_buf, true, {
+      relative = "editor",
+      width = rw,
+      height = rh,
+      row = rr,
+      col = rc,
+      style = "minimal",
+      border = "rounded",
+      title = " Reply  <C-s> send  q cancel ",
+      title_pos = "center",
+    })
+
+    vim.cmd("startinsert")
+
+    setup_note_float_keymaps(reply_buf, reply_win, function()
+      local reply_lines = vim.api.nvim_buf_get_lines(reply_buf, 0, -1, false)
+      local body = table.concat(reply_lines, "\n")
+      if not body:match("%S") then
+        return
+      end
+
+      local info = state.get_forge_info()
+      if not info then
+        vim.notify("No PR/MR detected — cannot reply", vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("Posting reply...", vim.log.levels.INFO)
+      local url, err
+      if note.is_general then
+        url, err = forge.reply_to_pr(info, body)
+      else
+        url, err = forge.reply_to_thread(info, note.thread_id, body)
+      end
+      if err then
+        vim.notify("Reply failed: " .. err, vim.log.levels.ERROR)
+      else
+        vim.notify("Reply posted" .. (url and (": " .. url) or ""), vim.log.levels.INFO)
+        if note.replies then
+          table.insert(note.replies, {
+            author = "you",
+            body = body,
+            url = url,
+            is_top = false,
+          })
+        end
+      end
+    end, function()
+      vim.api.nvim_win_close(reply_win, true)
+    end)
+  end, buf_opts)
 end
 
 --- Open a floating window listing all notes across all files.
@@ -1351,100 +1896,231 @@ function M.open_notes_list()
   local note_refs = {} -- maps display line -> {note_idx, file_path, line, note_id}
   local highlight_rows = {} -- {line_idx, hl_group, col_start, col_end}
 
-  -- Split notes by status
-  local drafts = {}
-  local staged = {}
-  local published = {}
+  local width, col_offset = float_dimensions()
+
+  local function relative_time(iso_str)
+    if not iso_str or type(iso_str) ~= "string" then
+      return ""
+    end
+    local y, mo, d, h, mi = iso_str:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+)")
+    if not y then
+      return ""
+    end
+    local then_ts =
+      os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = tonumber(h), min = tonumber(mi) })
+    local diff = os.difftime(os.time(), then_ts)
+    if diff < 0 then
+      return ""
+    end
+    if diff < 3600 then
+      return math.floor(diff / 60) .. "m"
+    elseif diff < 86400 then
+      return math.floor(diff / 3600) .. "h"
+    elseif diff < 604800 then
+      return math.floor(diff / 86400) .. "d"
+    else
+      return math.floor(diff / 604800) .. "w"
+    end
+  end
+
+  local function last_activity(note)
+    if not note.replies or #note.replies == 0 then
+      return ""
+    end
+    local last = note.replies[#note.replies]
+    return relative_time(last.created_at)
+  end
+
+  local active_files = state.active_files()
+  local file_order = {}
+  for idx, f in ipairs(active_files) do
+    file_order[f.path] = idx
+  end
+
+  local local_notes = {}
+  local open_notes = {}
+  local resolved_notes = {}
+  local discussion_notes = {}
   for i, note in ipairs(all_notes) do
     local entry = { idx = i, note = note }
-    if note.status == "published" then
-      table.insert(published, entry)
-    elseif note.status == "staged" then
-      table.insert(staged, entry)
-    else
-      table.insert(drafts, entry)
+    if note.is_general then
+      table.insert(discussion_notes, entry)
+    elseif note.status == "draft" or note.status == "staged" then
+      table.insert(local_notes, entry)
+    elseif note.status == "remote" and note.resolved then
+      table.insert(resolved_notes, entry)
+    elseif note.status == "remote" then
+      table.insert(open_notes, entry)
     end
   end
 
-  -- Render a section of notes grouped by file
-  local function render_section(section_notes, section_label, status_char, status_hl)
-    if #section_notes == 0 then
+  local function sort_by_file_order(list)
+    table.sort(list, function(a, b)
+      local oa = file_order[a.note.file_path] or 9999
+      local ob = file_order[b.note.file_path] or 9999
+      if oa ~= ob then
+        return oa < ob
+      end
+      local al = type(a.note.line) == "number" and a.note.line or 0
+      local bl = type(b.note.line) == "number" and b.note.line or 0
+      return al < bl
+    end)
+  end
+
+  local function sort_by_recent(list)
+    table.sort(list, function(a, b)
+      local a_last = a.note.replies and #a.note.replies > 0 and a.note.replies[#a.note.replies].created_at or ""
+      local b_last = b.note.replies and #b.note.replies > 0 and b.note.replies[#b.note.replies].created_at or ""
+      return a_last > b_last -- reverse chronological
+    end)
+  end
+
+  sort_by_file_order(local_notes)
+  sort_by_recent(discussion_notes)
+  sort_by_recent(open_notes)
+  sort_by_recent(resolved_notes)
+
+  local extra_hls = {}
+  local dw = vim.fn.strdisplaywidth
+
+  local function render_note(entry)
+    local note = entry.note
+
+    local icon, hl
+    if note.status == "staged" then
+      icon, hl = "\u{25B2}", HL.note_published
+    elseif note.status == "draft" then
+      icon, hl = "\u{25CB}", HL.note_draft
+    elseif note.resolved then
+      icon, hl = "\u{2713}", HL.note_remote_resolved
+    else
+      icon, hl = "\u{25CF}", HL.note_remote
+    end
+
+    local lref
+    if note.file_path then
+      local fname = note.file_path:match("([^/]+)$") or note.file_path
+      lref = fname .. ":" .. tostring(note.line or "?")
+    else
+      lref = "PR"
+    end
+
+    local meta_parts = {}
+    if note.author then
+      table.insert(meta_parts, "@" .. note.author)
+    end
+    local reply_count = note.replies and #note.replies or 0
+    if reply_count > 1 then
+      table.insert(meta_parts, tostring(reply_count) .. " replies")
+    end
+    local ago = last_activity(note)
+    if ago ~= "" then
+      table.insert(meta_parts, ago .. " ago")
+    end
+    if note.status == "staged" then
+      table.insert(meta_parts, "staged")
+    end
+    local meta = table.concat(meta_parts, "  ")
+
+    local body = (note.body or ""):match("^([^\n]*)") or ""
+    local left = "    " .. icon .. " " .. lref .. " "
+    local left_dw = dw(left)
+    local meta_dw = #meta > 0 and (dw(meta) + 2) or 0 -- 2 for "  " gap
+    local avail = math.max(width - left_dw - meta_dw - 1, 8)
+    if dw(body) > avail then
+      while dw(body) > avail - 1 and #body > 0 do
+        body = body:sub(1, #body - 1)
+      end
+      body = body .. "\u{2026}"
+    end
+
+    local content = left .. body
+    local display
+    if #meta > 0 then
+      local pad = math.max(width - dw(content) - dw(meta), 2)
+      display = content .. string.rep(" ", pad) .. meta
+    else
+      display = content
+    end
+
+    table.insert(lines, display)
+    highlight_rows[#lines] = { hl = hl, col_start = 4, col_end = 4 + #icon }
+    note_refs[#lines] = {
+      idx = entry.idx,
+      file_path = note.file_path,
+      line = note.line,
+      side = note.side,
+      note_id = note.id,
+      status = note.status,
+    }
+
+    if #meta > 0 then
+      local meta_byte_start = #display - #meta
+      table.insert(extra_hls, { #lines, HL.hunk_header, meta_byte_start, #display })
+    end
+  end
+
+  local function render_section(section, label, label_hl, separator)
+    if #section == 0 then
       return
     end
-
-    table.insert(lines, section_label)
-    highlight_rows[#lines] = { hl = HL.file_header }
-    note_refs[#lines] = false
-
-    -- Group by file
-    local by_file = {}
-    local file_order = {}
-    for _, entry in ipairs(section_notes) do
-      local fp = entry.note.file_path
-      if not by_file[fp] then
-        by_file[fp] = {}
-        table.insert(file_order, fp)
-      end
-      table.insert(by_file[fp], entry)
-    end
-
-    for _, fp in ipairs(file_order) do
-      table.insert(lines, "  " .. fp)
-      highlight_rows[#lines] = { hl = HL.explorer_file }
+    if separator and #lines > 0 then
+      table.insert(lines, "")
       note_refs[#lines] = false
-
-      for _, entry in ipairs(by_file[fp]) do
-        local note = entry.note
-        local line_ref = tostring(note.line)
-        if note.end_line then
-          line_ref = line_ref .. "-" .. tostring(note.end_line)
-        end
-        local body_preview = note.body:match("^([^\n]*)") or ""
-        if #body_preview > 50 then
-          body_preview = body_preview:sub(1, 47) .. "..."
-        end
-        local icon = (note.note_type == "suggestion") and "S" or " "
-        local url_suffix = note.url and (" " .. note.url) or ""
-        local display = string.format(
-          "   %s %s #%-3d L%-6s %s%s",
-          status_char,
-          icon,
-          note.id or 0,
-          line_ref,
-          body_preview,
-          url_suffix
-        )
-        table.insert(lines, display)
-        highlight_rows[#lines] = { hl = status_hl, col_start = 3, col_end = 4 }
-        note_refs[#lines] = {
-          idx = entry.idx,
-          file_path = fp,
-          line = note.line,
-          side = note.side,
-          note_id = note.id,
-        }
-      end
     end
 
-    table.insert(lines, "")
+    table.insert(lines, string.format(" %s (%d)", label, #section))
+    highlight_rows[#lines] = { hl = label_hl }
     note_refs[#lines] = false
+
+    for _, entry in ipairs(section) do
+      render_note(entry)
+    end
   end
 
-  render_section(staged, "Staged", "+", HL.note_published)
-  render_section(drafts, "Draft", "-", HL.note_draft)
-  render_section(published, "Published", "*", HL.note_sign)
+  render_section(local_notes, "Your Notes", HL.note_draft, false)
+  render_section(open_notes, "Conversations", HL.note_remote, true)
+  render_section(discussion_notes, "Discussion", HL.note_author, true)
+  render_section(resolved_notes, "Resolved", HL.note_remote_resolved, true)
 
-  -- Create float
-  local width = math.min(math.floor(vim.o.columns * 0.7), 80)
-  local height = math.min(#lines, math.floor(vim.o.lines * 0.6))
+  table.insert(lines, "")
+  note_refs[#lines] = false
+  local sep = string.rep("\u{2500}", width - 2)
+  table.insert(lines, sep)
+  highlight_rows[#lines] = { hl = HL.note_separator }
+  note_refs[#lines] = false
+  table.insert(lines, " <CR> open  s stage  P publish  R refresh  b url  q close")
+  highlight_rows[#lines] = { hl = HL.hunk_header }
+  note_refs[#lines] = false
+
+  local height = math.min(#lines, math.floor(vim.o.lines * 0.75))
   local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
+  local col = col_offset
 
   local list_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[list_buf].buftype = "nofile"
   vim.bo[list_buf].bufhidden = "wipe"
   vim.api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
   vim.bo[list_buf].modifiable = false
+
+  local title_parts = {}
+  if #local_notes > 0 then
+    table.insert(title_parts, #local_notes .. " yours")
+  end
+  if #open_notes > 0 then
+    table.insert(title_parts, #open_notes .. " open")
+  end
+  if #discussion_notes > 0 then
+    table.insert(title_parts, #discussion_notes .. " discussion")
+  end
+  if #resolved_notes > 0 then
+    table.insert(title_parts, #resolved_notes .. " resolved")
+  end
+  local title = " Review Notes"
+  if #title_parts > 0 then
+    title = title .. " \u{2502} " .. table.concat(title_parts, "  ")
+  end
+  title = title .. " "
 
   local list_win = vim.api.nvim_open_win(list_buf, true, {
     relative = "editor",
@@ -1454,25 +2130,18 @@ function M.open_notes_list()
     col = col,
     style = "minimal",
     border = "rounded",
-    title = string.format(
-      " Notes (%d staged, %d draft, %d published) │ s stage  P publish  C clear  q close ",
-      #staged,
-      #drafts,
-      #published
-    ),
+    title = title,
     title_pos = "center",
   })
 
   vim.wo[list_win].cursorline = true
 
-  -- Highlights
   local ns = vim.api.nvim_create_namespace("review_notes_list")
   for i, _ in ipairs(lines) do
     local hr = highlight_rows[i]
     if hr then
       vim.api.nvim_buf_add_highlight(list_buf, ns, hr.hl, i - 1, hr.col_start or 0, hr.col_end or -1)
     end
-    -- Highlight #<number> references in body previews
     if note_refs[i] and note_refs[i] ~= false then
       local line_text = lines[i]
       local search_start = 1
@@ -1491,9 +2160,12 @@ function M.open_notes_list()
     end
   end
 
+  for _, ehl in ipairs(extra_hls) do
+    vim.api.nvim_buf_add_highlight(list_buf, ns, ehl[2], ehl[1] - 1, ehl[3], ehl[4])
+  end
+
   local buf_opts = { buffer = list_buf, noremap = true, silent = true }
 
-  -- q / Esc: close
   vim.keymap.set("n", "q", function()
     vim.api.nvim_win_close(list_win, true)
   end, buf_opts)
@@ -1501,11 +2173,14 @@ function M.open_notes_list()
     vim.api.nvim_win_close(list_win, true)
   end, buf_opts)
 
-  -- s: toggle draft <-> staged
   vim.keymap.set("n", "s", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
     local ref = note_refs[cursor[1]]
     if not ref or ref == false or not ref.note_id then
+      return
+    end
+    if ref.status == "remote" then
+      vim.notify("Cannot stage remote comments", vim.log.levels.WARN)
       return
     end
     state.toggle_staged(ref.note_id)
@@ -1514,7 +2189,6 @@ function M.open_notes_list()
     M.refresh()
   end, buf_opts)
 
-  -- P: publish all staged notes
   vim.keymap.set("n", "P", function()
     local staged_notes = {}
     for _, note in ipairs(all_notes) do
@@ -1528,8 +2202,7 @@ function M.open_notes_list()
       return
     end
 
-    local forge = require("review.forge")
-    local info = forge.detect()
+    local info = state.get_forge_info()
 
     if not info then
       -- No PR/MR detected, publish locally only
@@ -1579,16 +2252,26 @@ function M.open_notes_list()
     M.refresh()
   end, buf_opts)
 
-  -- C: clear all notes
   vim.keymap.set("n", "C", function()
-    local count = #all_notes
-    state.clear_notes()
-    vim.notify(count .. " note(s) cleared", vim.log.levels.INFO)
+    local count = state.clear_drafts()
+    if count == 0 then
+      vim.notify("No draft notes to clear", vim.log.levels.INFO)
+      return
+    end
+    vim.notify(count .. " draft note(s) cleared", vim.log.levels.INFO)
     vim.api.nvim_win_close(list_win, true)
     M.refresh()
+    if #state.get_notes() > 0 then
+      M.open_notes_list()
+    end
   end, buf_opts)
 
-  -- gd: jump to referenced note (find #<id> under cursor or in current line)
+  vim.keymap.set("n", "R", function()
+    vim.api.nvim_win_close(list_win, true)
+    vim.notify("Refreshing PR comments...", vim.log.levels.INFO)
+    require("review").refresh_comments()
+  end, buf_opts)
+
   vim.keymap.set("n", "gd", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
     local line_text = lines[cursor[1]]
@@ -1615,12 +2298,21 @@ function M.open_notes_list()
     vim.notify("No reference found on this line", vim.log.levels.INFO)
   end, buf_opts)
 
-  -- <CR>: jump to note
   vim.keymap.set("n", "<CR>", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
     local line_nr = cursor[1]
     local ref = note_refs[line_nr]
     if not ref or ref == false then
+      return
+    end
+
+    -- Open thread view for remote notes
+    if ref.status == "remote" then
+      local note_obj = state.get_note_by_id(ref.note_id)
+      if note_obj then
+        vim.api.nvim_win_close(list_win, true)
+        M.open_thread_view(note_obj)
+      end
       return
     end
 
@@ -1669,11 +2361,14 @@ function M.open_notes_list()
     end)
   end, buf_opts)
 
-  -- dd: delete note under cursor
   vim.keymap.set("n", "dd", function()
     local cursor = vim.api.nvim_win_get_cursor(list_win)
     local ref = note_refs[cursor[1]]
     if not ref or ref == false then
+      return
+    end
+    if ref.status == "remote" then
+      vim.notify("Cannot delete remote comments", vim.log.levels.WARN)
       return
     end
     state.remove_note(ref.idx)
@@ -1682,7 +2377,20 @@ function M.open_notes_list()
     M.refresh()
   end, buf_opts)
 
-  -- ]n / [n: jump between note entries in the list (skip headers and blanks)
+  vim.keymap.set("n", "b", function()
+    local cursor = vim.api.nvim_win_get_cursor(list_win)
+    local ref = note_refs[cursor[1]]
+    if not ref or ref == false or not ref.note_id then
+      return
+    end
+    local note_obj = state.get_note_by_id(ref.note_id)
+    if not note_obj or not note_obj.url then
+      vim.notify("No URL for this note", vim.log.levels.INFO)
+      return
+    end
+    vim.ui.open(note_obj.url)
+  end, buf_opts)
+
   local num_lines = #lines
   local function jump_in_list(dir)
     local cur = vim.api.nvim_win_get_cursor(list_win)[1]
@@ -1731,6 +2439,7 @@ end
 
 --- Refresh both panels (call after state changes).
 function M.refresh()
+  clear_inline_preview()
   local ui_state = state.get_ui()
   if not ui_state then
     return

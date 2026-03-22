@@ -28,20 +28,27 @@ end
 --- Save session notes to disk.
 ---@param session ReviewSession
 function M.save(session)
-  if not session or #session.notes == 0 then
-    local path = storage_path()
-    if path then
-      vim.fn.delete(path)
-    end
-    return
-  end
-
   local path = storage_path()
   if not path then
     return
   end
 
-  local json = vim.fn.json_encode(session.notes)
+  -- Filter out remote notes — they come from the forge each session
+  local to_save = {}
+  if session then
+    for _, note in ipairs(session.notes) do
+      if note.status ~= "remote" then
+        table.insert(to_save, note)
+      end
+    end
+  end
+
+  if #to_save == 0 then
+    vim.fn.delete(path)
+    return
+  end
+
+  local json = vim.fn.json_encode(to_save)
   vim.fn.writefile({ json }, path)
 end
 
@@ -63,27 +70,20 @@ function M.load()
     return {}
   end
 
+  local valid_status = { draft = true, staged = true }
+  local result = {}
   for _, note in ipairs(data) do
     note.id = note.id or 0
     note.note_type = note.note_type or "comment"
     note.side = note.side or "new"
-    -- Migrate from old boolean published field
-    if note.published ~= nil and not note.status then
-      note.status = note.published and "published" or "draft"
-      note.published = nil
-    end
     note.status = note.status or "draft"
+    -- Drop notes with stale statuses (e.g. "published" from old versions)
+    if valid_status[note.status] then
+      table.insert(result, note)
+    end
   end
 
-  return data
-end
-
---- Delete persisted notes for the current repo.
-function M.clear()
-  local path = storage_path()
-  if path then
-    vim.fn.delete(path)
-  end
+  return result
 end
 
 return M
