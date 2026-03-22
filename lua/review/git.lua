@@ -1,43 +1,44 @@
 --- Thin wrappers around git shell commands.
 local M = {}
 
---- Get the git repository root for the current directory.
+local cached_root = nil
+
+--- Get the git repository root for the current directory (cached).
 ---@return string|nil root  Absolute path, or nil if not in a git repo
 function M.root()
+  if cached_root then
+    return cached_root
+  end
   local out = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })
   if vim.v.shell_error ~= 0 then
     return nil
   end
-  return out[1]
+  cached_root = out[1]
+  return cached_root
 end
 
---- Get the current branch name.
----@return string|nil branch
-function M.current_branch()
-  local out = vim.fn.systemlist({ "git", "rev-parse", "--abbrev-ref", "HEAD" })
-  if vim.v.shell_error ~= 0 then
-    return nil
-  end
-  return out[1]
-end
+local cached_default_branch = nil
 
---- Get the default remote branch (origin/main or origin/master).
+--- Get the default remote branch (origin/main or origin/master, cached).
 ---@return string|nil ref
 function M.default_branch()
-  -- Try to get the remote HEAD reference
+  if cached_default_branch then
+    return cached_default_branch
+  end
   local out = vim.fn.systemlist({ "git", "symbolic-ref", "refs/remotes/origin/HEAD" })
   if vim.v.shell_error == 0 and out[1] then
-    -- Returns something like "refs/remotes/origin/main"
-    return out[1]:match("refs/remotes/origin/(.+)")
+    cached_default_branch = out[1]:match("refs/remotes/origin/(.+)")
+    return cached_default_branch
   end
-  -- Fallback: check if main or master exists
-  local check_main = vim.fn.systemlist({ "git", "rev-parse", "--verify", "origin/main" })
+  local _ = vim.fn.systemlist({ "git", "rev-parse", "--verify", "origin/main" })
   if vim.v.shell_error == 0 then
-    return "main"
+    cached_default_branch = "main"
+    return cached_default_branch
   end
-  local check_master = vim.fn.systemlist({ "git", "rev-parse", "--verify", "origin/master" })
+  _ = vim.fn.systemlist({ "git", "rev-parse", "--verify", "origin/master" })
   if vim.v.shell_error == 0 then
-    return "master"
+    cached_default_branch = "master"
+    return cached_default_branch
   end
   return nil
 end
@@ -94,7 +95,6 @@ function M.log(base_ref, head_ref)
     "git",
     "log",
     "--format=%H\t%s\t%an",
-    "--reverse",
     range,
   })
   if vim.v.shell_error ~= 0 then
@@ -116,24 +116,47 @@ function M.log(base_ref, head_ref)
   return commits
 end
 
---- Parse owner/repo from a GitHub remote URL.
----@return string|nil owner, string|nil repo
+--- Parse forge, owner, and repo from the remote URL.
+---@return {forge: string, owner: string, repo: string}|nil
 function M.parse_remote()
   local url = M.remote_url()
   if not url then
-    return nil, nil
+    return nil
   end
-  -- SSH: git@github.com:owner/repo.git
-  local owner, repo = url:match("git@github%.com:([^/]+)/([^/%.]+)")
+
+  -- Strip trailing .git suffix and whitespace for easier matching
+  local clean = url:gsub("%.git%s*$", "")
+
+  -- GitHub SSH: git@github.com:owner/repo
+  local owner, repo = clean:match("git@github%.com:([^/]+)/(.+)$")
   if owner then
-    return owner, repo
+    return { forge = "github", owner = owner, repo = repo }
   end
-  -- HTTPS: https://github.com/owner/repo.git
-  owner, repo = url:match("github%.com/([^/]+)/([^/%.]+)")
+  -- GitHub HTTPS: https://github.com/owner/repo
+  owner, repo = clean:match("github%.com/([^/]+)/(.+)$")
   if owner then
-    return owner, repo
+    return { forge = "github", owner = owner, repo = repo }
   end
-  return nil, nil
+
+  -- GitLab SSH: git@gitlab.com:owner/repo (or self-hosted)
+  local host
+  host, owner, repo = clean:match("git@([^:]*gitlab[^:]*):([^/]+)/(.+)$")
+  if owner then
+    return { forge = "gitlab", owner = owner, repo = repo, host = host }
+  end
+  -- GitLab HTTPS: https://gitlab.com/owner/repo (or self-hosted)
+  host, owner, repo = clean:match("https?://([^/]*gitlab[^/]*)/([^/]+)/(.+)$")
+  if owner then
+    return { forge = "gitlab", owner = owner, repo = repo, host = host }
+  end
+
+  return nil
+end
+
+--- Invalidate all cached git values.
+function M.invalidate_cache()
+  cached_root = nil
+  cached_default_branch = nil
 end
 
 return M

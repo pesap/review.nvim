@@ -5,7 +5,7 @@ local M = {}
 ---@class ReviewConfig
 local defaults = {
   view = "unified",
-  colorblind = false,
+  colorblind = true,
   keymaps = {
     add_note = "a",
     edit_note = "e",
@@ -43,7 +43,6 @@ function M.open(args)
   args = args or {}
 
   local git = require("review.git")
-  local diff_mod = require("review.diff")
   local state = require("review.state")
   local ui = require("review.ui")
 
@@ -58,17 +57,57 @@ function M.open(args)
     return
   end
 
-  local mode = "local"
-  local ref = nil
+  local forge = require("review.forge")
 
-  if #args > 0 and args[1] == "pr" then
-    vim.notify("PR mode coming soon. For now, use :Review [ref] for local diffs.", vim.log.levels.INFO)
+  if #args > 0 then
+    local ref = args[1]
+    M._open_with_ref(ref)
     return
-  elseif #args > 0 then
-    ref = args[1]
   end
 
-  -- Local mode: get diff
+  -- Check if we have a cached forge detect result (instant)
+  local cached = forge.get_cached_detect()
+  if cached then
+    local base = git.default_branch()
+    if base then
+      vim.notify(
+        string.format("Reviewing %s PR #%d against %s", cached.forge, cached.pr_number, base),
+        vim.log.levels.INFO
+      )
+      M._open_with_ref(base)
+      state.set_forge_info(cached)
+      M.refresh_comments()
+      return
+    end
+  end
+
+  -- No cache — open with default branch diff, detect PR in background
+  local base = git.default_branch()
+  if base then
+    M._open_with_ref(base)
+
+    forge.detect_async(function(info)
+      if not state.get() then
+        return
+      end
+      if info then
+        state.set_forge_info(info)
+        vim.notify(string.format("Detected %s PR #%d", info.forge, info.pr_number), vim.log.levels.INFO)
+        M.refresh_comments()
+      end
+    end)
+  else
+    M._open_with_ref(nil)
+  end
+end
+
+--- Internal: open the review UI with a given ref.
+---@param ref string|nil
+function M._open_with_ref(ref)
+  local git = require("review.git")
+  local diff_mod = require("review.diff")
+  local state = require("review.state")
+  local ui = require("review.ui")
   local diff_text = git.diff(ref)
   if diff_text == "" then
     vim.notify("No changes to review" .. (ref and (" against " .. ref) or ""), vim.log.levels.INFO)
@@ -81,10 +120,8 @@ function M.open(args)
     return
   end
 
-  -- Create session and open UI
-  state.create(mode, ref or "HEAD", files)
+  state.create("local", ref or "HEAD", files)
 
-  -- Load commits in the range (if diffing against a ref)
   if ref then
     local commits = git.log(ref)
     if #commits > 0 then
@@ -95,26 +132,62 @@ function M.open(args)
   ui.open()
 end
 
+--- Fetch (or re-fetch) remote PR comments and refresh the UI.
+--- Runs asynchronously — UI updates when comments arrive.
+function M.refresh_comments()
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    return
+  end
+
+  local forge_info = state.get_forge_info()
+  if not forge_info then
+    vim.notify("No PR/MR detected for this session", vim.log.levels.WARN)
+    return
+  end
+
+  local forge = require("review.forge")
+
+  -- Clear existing remote notes
+  state.clear_remote_comments()
+
+  -- Fetch asynchronously
+  forge.fetch_comments_async(forge_info, function(comments, fetch_err)
+    -- Verify session is still active
+    if not state.get() then
+      return
+    end
+
+    if fetch_err then
+      vim.notify("Could not load PR comments: " .. fetch_err, vim.log.levels.WARN)
+      return
+    end
+
+    if comments and #comments > 0 then
+      state.load_remote_comments(comments)
+      vim.notify(string.format("Loaded %d conversation(s) from PR", #comments), vim.log.levels.INFO)
+    end
+
+    local ui = require("review.ui")
+    ui.refresh()
+  end)
+end
+
 --- Close the current review session.
 function M.close()
   local ui = require("review.ui")
   ui.close()
 end
 
---- Submit draft comments (PR mode only).
-function M.submit()
+--- Toggle the review panel open/closed.
+function M.toggle()
   local state = require("review.state")
-  local s = state.get()
-  if not s then
-    vim.notify("No active review session", vim.log.levels.ERROR)
-    return
+  if state.get() then
+    M.close()
+  else
+    M.open({})
   end
-  if s.mode ~= "pr" then
-    vim.notify("Submit is only available in PR mode", vim.log.levels.WARN)
-    return
-  end
-  -- Will be implemented in Phase 4
-  vim.notify("Submit coming in Phase 4", vim.log.levels.INFO)
 end
 
 --- Export notes to markdown (local mode).

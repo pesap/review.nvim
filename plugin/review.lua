@@ -23,21 +23,16 @@ end, {
   desc = "Close code review",
 })
 
-vim.api.nvim_create_user_command("ReviewSubmit", function()
-  require("review").submit()
-end, {
-  desc = "Submit review comments",
-})
-
 vim.api.nvim_create_user_command("ReviewToggle", function()
-  local st = require("review.state")
-  if st.get() then
-    require("review").close()
-  else
-    require("review").open({})
-  end
+  require("review").toggle()
 end, {
   desc = "Toggle code review panel",
+})
+
+vim.api.nvim_create_user_command("ReviewRefresh", function()
+  require("review").refresh_comments()
+end, {
+  desc = "Re-fetch PR/MR comments from remote",
 })
 
 vim.api.nvim_create_user_command("ReviewExport", function(opts)

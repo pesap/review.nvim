@@ -12,10 +12,12 @@ Minimal code review plugin for Neovim.
 - Commit navigation with per-commit file filtering
 - Inline notes on any diff line or visual selection
 - Suggestion notes with GitHub-compatible `suggestion` blocks
-- Notes list panel, jump between notes across files
+- Notes list panel with draft/staged/published workflow
+- Note persistence across sessions
+- Reference other notes with `#<id>` syntax
 - Export notes to markdown
 - Configurable keymaps
-- Colorblind-friendly color scheme option
+- Colorblind-friendly color scheme (enabled by default)
 - `:checkhealth review`
 
 ## Requirements
@@ -43,12 +45,18 @@ lazy.nvim:
 :ReviewExport        " export notes to markdown
 ```
 
+You can also call `toggle()` from a keymap:
+
+```lua
+vim.keymap.set("n", "<leader>rr", "<cmd>ReviewToggle<cr>", { desc = "Toggle review" })
+```
+
 ## Config
 
 ```lua
 require("review").setup({
   view = "unified",       -- "unified" or "split"
-  colorblind = false,     -- blue/yellow instead of red/green
+  colorblind = true,      -- blue/yellow scheme (default), set false for red/green
   keymaps = {
     add_note = "a",
     edit_note = "e",
@@ -61,6 +69,7 @@ require("review").setup({
     prev_note = "[n",
     toggle_split = "s",
     notes_list = "N",
+    suggestion = "S",
     close = "q",
   },
 })
@@ -85,9 +94,30 @@ Diff viewer:
 | `s` | toggle split |
 | `q` | close |
 
-Notes list: `j`/`k` navigate, `<CR>` jump, `dd` delete, `q` close
+Notes list:
+
+| Key | What |
+|-----|------|
+| `j` / `k` | navigate between notes |
+| `<CR>` | jump to note in diff |
+| `dd` | delete note |
+| `p` | toggle draft/staged |
+| `P` | publish all staged notes |
+| `C` | clear all notes |
+| `gd` | jump to referenced note (`#<id>`) |
+| `q` | close |
 
 Note editor: `<C-s>` or `:wq` save, `<Esc>` cancel
+
+## Notes workflow
+
+Notes go through three stages:
+
+1. **Draft** (`-`) — newly created notes start here
+2. **Staged** (`+`) — press `p` to mark a note as ready to publish
+3. **Published** (`*`) — press `P` to publish all staged notes
+
+Notes persist across sessions automatically. Reference other notes by typing `#<id>` in the note body (e.g., `see #1 for context`). Referenced notes are highlighted and navigable with `gd`.
 
 ## Inspiration
 

@@ -16,20 +16,6 @@ local function parse_hunk_header(header)
   return old_start, old_count, new_start, new_count
 end
 
---- Parse a file status character from diff --name-status output.
----@param char string
----@return string status  One of "M", "A", "D", "R"
-local function normalize_status(char)
-  if char == "M" or char == "A" or char == "D" or char == "R" then
-    return char
-  end
-  -- Renames show as R followed by a percentage, e.g. R100
-  if char:sub(1, 1) == "R" then
-    return "R"
-  end
-  return "M" -- fallback
-end
-
 --- Parse unified diff text into structured file/hunk/line data.
 ---@param diff_text string  Raw output of `git diff` or `git diff --no-index`
 ---@return ReviewFile[]
