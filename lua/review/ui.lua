@@ -2306,8 +2306,8 @@ function M.open_notes_list()
       return
     end
 
-    -- Open thread view for remote notes
-    if ref.status == "remote" then
+    -- Remote discussion comments (no code position) — just open thread view
+    if ref.status == "remote" and not ref.file_path then
       local note_obj = state.get_note_by_id(ref.note_id)
       if note_obj then
         vim.api.nvim_win_close(list_win, true)
@@ -2319,6 +2319,8 @@ function M.open_notes_list()
     local target_path = ref.file_path
     local target_line = ref.line
     local target_side = ref.side
+    local is_remote = ref.status == "remote"
+    local remote_note_id = is_remote and ref.note_id or nil
 
     vim.api.nvim_win_close(list_win, true)
 
@@ -2357,6 +2359,14 @@ function M.open_notes_list()
       end
       if dl then
         vim.api.nvim_win_set_cursor(ui_state.diff_win, { dl, 0 })
+      end
+
+      -- Open thread view for remote code comments after navigating
+      if is_remote and remote_note_id then
+        local note_obj = state.get_note_by_id(remote_note_id)
+        if note_obj then
+          M.open_thread_view(note_obj)
+        end
       end
     end)
   end, buf_opts)
