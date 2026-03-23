@@ -17,6 +17,16 @@ function M.root()
   return cached_root
 end
 
+--- Get the current branch name.
+---@return string|nil branch
+function M.current_branch()
+  local out = vim.fn.systemlist({ "git", "rev-parse", "--abbrev-ref", "HEAD" })
+  if vim.v.shell_error ~= 0 then
+    return nil
+  end
+  return out[1]
+end
+
 local cached_default_branch = nil
 
 --- Get the default remote branch (origin/main or origin/master, cached).
@@ -116,41 +126,69 @@ function M.log(base_ref, head_ref)
   return commits
 end
 
+--- Detect the forge provider from a hostname.
+---@param host string
+---@return string|nil provider  "github"|"gitlab"
+local function detect_provider(host)
+  if not host then
+    return nil
+  end
+  host = host:lower()
+  if host:find("github") then
+    return "github"
+  end
+  if host:find("gitlab") then
+    return "gitlab"
+  end
+  return nil
+end
+
 --- Parse forge, owner, and repo from the remote URL.
----@return {forge: string, owner: string, repo: string}|nil
+--- Supports GitHub and GitLab, including subgroup paths.
+--- For other self-hosted instances, set `provider` in the plugin config.
+---@return {forge: string, owner: string, repo: string, host: string}|nil
 function M.parse_remote()
   local url = M.remote_url()
   if not url then
     return nil
   end
 
-  -- Strip trailing .git suffix and whitespace for easier matching
-  local clean = url:gsub("%.git%s*$", "")
+  local clean = vim.trim(url):gsub("%.git%s*$", "")
+  local host, path
 
-  -- GitHub SSH: git@github.com:owner/repo
-  local owner, repo = clean:match("git@github%.com:([^/]+)/(.+)$")
-  if owner then
-    return { forge = "github", owner = owner, repo = repo }
-  end
-  -- GitHub HTTPS: https://github.com/owner/repo
-  owner, repo = clean:match("github%.com/([^/]+)/(.+)$")
-  if owner then
-    return { forge = "github", owner = owner, repo = repo }
+  -- SSH: git@<host>:<path> (optionally with .git already stripped above)
+  host, path = clean:match("^git@([^:]+):(.+)$")
+  if not host then
+    host, path = clean:match("^ssh://git@([^/]+)/(.+)$")
   end
 
-  -- GitLab SSH: git@gitlab.com:owner/repo (or self-hosted)
-  local host
-  host, owner, repo = clean:match("git@([^:]*gitlab[^:]*):([^/]+)/(.+)$")
-  if owner then
-    return { forge = "gitlab", owner = owner, repo = repo, host = host }
-  end
-  -- GitLab HTTPS: https://gitlab.com/owner/repo (or self-hosted)
-  host, owner, repo = clean:match("https?://([^/]*gitlab[^/]*)/([^/]+)/(.+)$")
-  if owner then
-    return { forge = "gitlab", owner = owner, repo = repo, host = host }
+  -- HTTPS: https://<host>/<path>
+  if not host then
+    host, path = clean:match("^https?://([^/]+)/(.+)$")
   end
 
-  return nil
+  if not host or not path then
+    return nil
+  end
+
+  local owner, repo = path:match("^(.+)/([^/]+)$")
+  if not owner or not repo then
+    return nil
+  end
+
+  -- Allow config override for self-hosted instances without "gitlab" in hostname
+  local config = require("review").config or {}
+  local provider = config.provider or detect_provider(host)
+  if not provider then
+    return nil
+  end
+
+  return {
+    forge = provider,
+    owner = owner,
+    repo = repo,
+    host = host,
+  }
 end
 
 --- Invalidate all cached git values.

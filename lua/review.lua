@@ -6,6 +6,7 @@ local M = {}
 local defaults = {
   view = "unified",
   colorblind = true,
+  provider = nil, ---@type string|nil  "github"|"gitlab"|nil (nil = auto-detect from remote URL)
   keymaps = {
     add_note = "a",
     edit_note = "e",
