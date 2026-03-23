@@ -311,6 +311,16 @@ query {
   )
 end
 
+--- Convert vim.NIL (from json_decode of JSON null) to real nil.
+---@param v any
+---@return any
+local function denull(v)
+  if v == vim.NIL then
+    return nil
+  end
+  return v
+end
+
 --- Parse raw GitHub GraphQL response into comments.
 ---@param raw string  Raw JSON output
 ---@return table[] comments, string|nil err
@@ -340,11 +350,15 @@ local function parse_github_threads(raw)
       goto continue
     end
 
-    local side = (not top.line and top.originalLine) and "old" or "new"
-    local line = top.startLine or top.line or top.originalLine
+    local d_line = denull(top.line)
+    local d_originalLine = denull(top.originalLine)
+    local d_startLine = denull(top.startLine)
+
+    local side = (not d_line and d_originalLine) and "old" or "new"
+    local line = d_startLine or d_line or d_originalLine
     local end_line = nil
-    if top.startLine and top.line and top.startLine ~= top.line then
-      end_line = top.line
+    if d_startLine and d_line and d_startLine ~= d_line then
+      end_line = d_line
     end
 
     local replies = {}
