@@ -24,8 +24,11 @@ Minimal code review plugin for Neovim.
 
 - Neovim >= 0.9.0
 - `git`
-- `gh` CLI (https://cli.github.com) for future PR features
+- `gh` CLI (https://cli.github.com) for GitHub PR features
+- `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
 - `plenary.nvim` for tests
+
+You only need `gh` or `glab` for the forge you use.
 
 ## Install
 
@@ -57,6 +60,7 @@ vim.keymap.set("n", "<leader>rr", "<cmd>ReviewToggle<cr>", { desc = "Toggle revi
 require("review").setup({
   view = "unified",       -- "unified" or "split"
   colorblind = true,      -- blue/yellow scheme (default), set false for red/green
+  provider = nil,         -- "github" | "gitlab" | nil (auto-detect from origin URL)
   keymaps = {
     add_note = "a",
     edit_note = "e",

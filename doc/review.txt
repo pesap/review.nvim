@@ -36,7 +36,8 @@ Features:
 
 - Neovim >= 0.9.0
 - git
-- gh CLI (https://cli.github.com/) — for PR features
+- gh CLI (https://cli.github.com/) — for GitHub PR features
+- glab CLI (https://gitlab.com/gitlab-org/cli) — for GitLab MR features
 - plenary.nvim — for running tests
 
 ==============================================================================
@@ -68,8 +69,10 @@ You can also set up a keymap to toggle the review panel: >lua
                         explorer panel. Select a commit to filter files to
                         that commit's changes.
 
-                        To review a PR: run `gh pr checkout <number>` first,
-                        then `:Review main` to see the diff.
+                        To review a PR/MR: check out the review branch first
+                        (`gh pr checkout <number>` for GitHub or
+                        `glab mr checkout <number>` for GitLab), then run
+                        `:Review main` to see the diff.
 
                                                              *:ReviewToggle*
 :ReviewToggle           Toggle the review panel. Opens if closed, closes
@@ -201,8 +204,9 @@ Default configuration: >lua
 Run `:checkhealth review` to verify your environment:
 
 - git is installed
-- gh CLI is installed
-- gh is authenticated (`gh auth login`)
+- gh and/or glab CLI are installed
+- gh/glab authentication is configured (`gh auth login`, `glab auth login`)
+- Missing CLI is reported as an error for the detected forge
 - Current directory is a git repository
 
 ==============================================================================
