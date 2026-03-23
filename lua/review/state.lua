@@ -32,6 +32,7 @@ end
 ---@field current_commit_idx number|nil  nil = all changes, number = specific commit
 ---@field current_file_idx number
 ---@field pr ReviewPR|nil
+---@field provider ReviewProvider|nil
 ---@field notes ReviewNote[]
 ---@field draft_comments ReviewComment[]
 ---@field ui_state ReviewUIState|nil
@@ -43,6 +44,7 @@ end
 ---@field repo string
 ---@field base string
 ---@field head string
+---@field diff_refs table|nil  {base_sha, head_sha, start_sha}
 
 ---@class ReviewFile
 ---@field path string
@@ -94,7 +96,7 @@ end
 ---@field end_line number|nil
 ---@field side string  "LEFT"|"RIGHT"
 ---@field body string
----@field github_id number|nil
+---@field remote_id number|nil
 
 ---@class ReviewUIState
 ---@field explorer_buf number|nil
@@ -120,6 +122,7 @@ function M.create(mode, base_ref, files)
     current_commit_idx = nil, -- nil = all changes
     current_file_idx = 1,
     pr = nil,
+    provider = nil,
     notes = {},
     draft_comments = {},
     forge_info = nil,
@@ -471,7 +474,7 @@ function M.add_draft(file_path, line, body, end_line, side)
     end_line = end_line,
     side = side or "RIGHT",
     body = body,
-    github_id = nil,
+    remote_id = nil,
   })
 end
 
