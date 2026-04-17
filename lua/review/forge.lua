@@ -192,7 +192,7 @@ local function gitlab_post(info, note, ctx)
 
   local json = vim.fn.json_encode({ body = note.body, position = position })
   local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", vim.fn.fnameescape(project_id), info.pr_number)
+    string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
 
   local out = vim.fn.system({
     "glab",
@@ -237,7 +237,7 @@ function M.resolve_context(info)
     local out = vim.fn.system({
       "glab",
       "api",
-      string.format("projects/%s/merge_requests/%d", vim.fn.fnameescape(project_id), info.pr_number),
+      string.format("projects/%s/merge_requests/%d", vim.uri_encode(project_id, "rfc2396"), info.pr_number),
     })
     if vim.v.shell_error ~= 0 then
       return nil, "Failed to get MR diff refs"
@@ -537,7 +537,7 @@ end
 local function gitlab_fetch(info)
   local project_id = info.owner .. "/" .. info.repo
   local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", vim.fn.fnameescape(project_id), info.pr_number)
+    string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
   local out = vim.fn.system({ "glab", "api", endpoint, "--paginate" })
   if vim.v.shell_error ~= 0 then
     return {}, "Failed to fetch MR discussions: " .. (out or "unknown")
@@ -565,7 +565,7 @@ function M.reply_to_pr(info, body)
   elseif info.forge == "gitlab" then
     local project_id = info.owner .. "/" .. info.repo
     local endpoint =
-      string.format("projects/%s/merge_requests/%d/notes", vim.fn.fnameescape(project_id), info.pr_number)
+      string.format("projects/%s/merge_requests/%d/notes", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
     local json = vim.fn.json_encode({ body = body })
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "POST", "--input", "-" }, json)
     if vim.v.shell_error ~= 0 then
@@ -598,7 +598,7 @@ function M.fetch_comments_async(info, callback)
   elseif info.forge == "gitlab" then
     local project_id = info.owner .. "/" .. info.repo
     local endpoint =
-      string.format("projects/%s/merge_requests/%d/discussions", vim.fn.fnameescape(project_id), info.pr_number)
+      string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
     vim.system(
       { "glab", "api", endpoint, "--paginate" },
       {},
@@ -638,7 +638,7 @@ function M.reply_to_thread(info, thread_id, body)
     local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/discussions/%s/notes",
-      vim.fn.fnameescape(project_id),
+      vim.uri_encode(project_id, "rfc2396"),
       info.pr_number,
       thread_id
     )
@@ -678,7 +678,7 @@ function M.edit_comment(info, comment_id, body)
     local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/notes/%d",
-      vim.fn.fnameescape(project_id),
+      vim.uri_encode(project_id, "rfc2396"),
       info.pr_number,
       comment_id
     )
@@ -712,7 +712,7 @@ function M.delete_comment(info, comment_id)
     local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/notes/%d",
-      vim.fn.fnameescape(project_id),
+      vim.uri_encode(project_id, "rfc2396"),
       info.pr_number,
       comment_id
     )
@@ -751,7 +751,7 @@ function M.resolve_thread(info, note, resolved)
     local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/discussions/%s",
-      vim.fn.fnameescape(project_id),
+      vim.uri_encode(project_id, "rfc2396"),
       info.pr_number,
       note.thread_id
     )
