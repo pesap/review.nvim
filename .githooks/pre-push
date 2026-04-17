@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -e
+
+echo "Running stylua check..."
+stylua --check lua/ plugin/
+echo "stylua check passed."

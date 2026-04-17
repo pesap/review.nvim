@@ -196,8 +196,7 @@ local function gitlab_post(info, note, ctx)
   end
 
   local json = vim.fn.json_encode({ body = note.body, position = position })
-  local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
+  local endpoint = string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
 
   local out = vim.fn.system({
     "glab",
@@ -539,8 +538,7 @@ local function parse_gitlab_discussions(raw)
 end
 
 local function gitlab_fetch(info)
-  local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
+  local endpoint = string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
   local out = vim.fn.system({ "glab", "api", endpoint, "--paginate" })
   if vim.v.shell_error ~= 0 then
     return {}, "Failed to fetch MR discussions: " .. (out or "unknown")
@@ -566,8 +564,7 @@ function M.reply_to_pr(info, body)
     end
     return nil, "Failed to parse response"
   elseif info.forge == "gitlab" then
-    local endpoint =
-      string.format("projects/%s/merge_requests/%d/notes", gl_project_id(info), info.pr_number)
+    local endpoint = string.format("projects/%s/merge_requests/%d/notes", gl_project_id(info), info.pr_number)
     local json = vim.fn.json_encode({ body = body })
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "POST", "--input", "-" }, json)
     if vim.v.shell_error ~= 0 then
@@ -598,8 +595,7 @@ function M.fetch_comments_async(info, callback)
       end)
     )
   elseif info.forge == "gitlab" then
-    local endpoint =
-      string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
+    local endpoint = string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
     vim.system(
       { "glab", "api", endpoint, "--paginate" },
       {},
@@ -675,12 +671,8 @@ function M.edit_comment(info, comment_id, body)
     end
     return nil, "Failed to parse edit response"
   elseif info.forge == "gitlab" then
-    local endpoint = string.format(
-      "projects/%s/merge_requests/%d/notes/%d",
-      gl_project_id(info),
-      info.pr_number,
-      comment_id
-    )
+    local endpoint =
+      string.format("projects/%s/merge_requests/%d/notes/%d", gl_project_id(info), info.pr_number, comment_id)
     local json = vim.fn.json_encode({ body = body })
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "PUT", "--input", "-" }, json)
     if vim.v.shell_error ~= 0 then
@@ -708,12 +700,8 @@ function M.delete_comment(info, comment_id)
     end
     return true, nil
   elseif info.forge == "gitlab" then
-    local endpoint = string.format(
-      "projects/%s/merge_requests/%d/notes/%d",
-      gl_project_id(info),
-      info.pr_number,
-      comment_id
-    )
+    local endpoint =
+      string.format("projects/%s/merge_requests/%d/notes/%d", gl_project_id(info), info.pr_number, comment_id)
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "DELETE" })
     if vim.v.shell_error ~= 0 then
       return false, format_api_error(out, "GitLab", "glab")
@@ -746,12 +734,8 @@ function M.resolve_thread(info, note, resolved)
     end
     return true, nil
   elseif info.forge == "gitlab" then
-    local endpoint = string.format(
-      "projects/%s/merge_requests/%d/discussions/%s",
-      gl_project_id(info),
-      info.pr_number,
-      note.thread_id
-    )
+    local endpoint =
+      string.format("projects/%s/merge_requests/%d/discussions/%s", gl_project_id(info), info.pr_number, note.thread_id)
     local json = vim.fn.json_encode({ resolved = resolved })
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "PUT", "--input", "-" }, json)
     if vim.v.shell_error ~= 0 then
