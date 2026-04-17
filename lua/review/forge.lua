@@ -238,15 +238,17 @@ function M.resolve_context(info)
       "glab",
       "api",
       string.format("projects/%s/merge_requests/%d", vim.fn.fnameescape(project_id), info.pr_number),
-      "--jq",
-      ".diff_refs",
     })
     if vim.v.shell_error ~= 0 then
       return nil, "Failed to get MR diff refs"
     end
-    local ok, diff_refs = pcall(vim.fn.json_decode, out)
-    if not ok or not diff_refs then
-      return nil, "Failed to parse diff refs"
+    local ok, data = pcall(vim.fn.json_decode, out)
+    if not ok or not data then
+      return nil, "Failed to parse MR response"
+    end
+    local diff_refs = data.diff_refs
+    if not diff_refs then
+      return nil, "MR response missing diff_refs"
     end
     return { diff_refs = diff_refs }, nil
   end
