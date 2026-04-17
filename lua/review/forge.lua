@@ -20,6 +20,13 @@ local function format_api_error(raw, forge_label, tool_name)
   return forge_label .. " API: " .. msg
 end
 
+--- Build URL-encoded GitLab project ID from forge info.
+---@param info table  Forge info with owner and repo fields
+---@return string  URL-encoded project path (e.g., "owner%2Frepo")
+local function gl_project_id(info)
+  return vim.uri_encode(info.owner .. "/" .. info.repo, "rfc2396")
+end
+
 local cached_user = nil
 
 --- Get the current authenticated user's login (cached after first call).
@@ -173,8 +180,6 @@ end
 ---@param ctx table  {diff_refs: table}
 ---@return string|nil url, string|nil err
 local function gitlab_post(info, note, ctx)
-  local project_id = info.owner .. "/" .. info.repo
-
   local position = {
     position_type = "text",
     base_sha = ctx.diff_refs.base_sha,
@@ -192,7 +197,7 @@ local function gitlab_post(info, note, ctx)
 
   local json = vim.fn.json_encode({ body = note.body, position = position })
   local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
+    string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
 
   local out = vim.fn.system({
     "glab",
@@ -233,11 +238,10 @@ function M.resolve_context(info)
     end
     return { commit_id = remote_head }, nil
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local out = vim.fn.system({
       "glab",
       "api",
-      string.format("projects/%s/merge_requests/%d", vim.uri_encode(project_id, "rfc2396"), info.pr_number),
+      string.format("projects/%s/merge_requests/%d", gl_project_id(info), info.pr_number),
     })
     if vim.v.shell_error ~= 0 then
       return nil, "Failed to get MR diff refs"
@@ -535,9 +539,8 @@ local function parse_gitlab_discussions(raw)
 end
 
 local function gitlab_fetch(info)
-  local project_id = info.owner .. "/" .. info.repo
   local endpoint =
-    string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
+    string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
   local out = vim.fn.system({ "glab", "api", endpoint, "--paginate" })
   if vim.v.shell_error ~= 0 then
     return {}, "Failed to fetch MR discussions: " .. (out or "unknown")
@@ -563,9 +566,8 @@ function M.reply_to_pr(info, body)
     end
     return nil, "Failed to parse response"
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint =
-      string.format("projects/%s/merge_requests/%d/notes", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
+      string.format("projects/%s/merge_requests/%d/notes", gl_project_id(info), info.pr_number)
     local json = vim.fn.json_encode({ body = body })
     local out = vim.fn.system({ "glab", "api", endpoint, "-X", "POST", "--input", "-" }, json)
     if vim.v.shell_error ~= 0 then
@@ -596,9 +598,8 @@ function M.fetch_comments_async(info, callback)
       end)
     )
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint =
-      string.format("projects/%s/merge_requests/%d/discussions", vim.uri_encode(project_id, "rfc2396"), info.pr_number)
+      string.format("projects/%s/merge_requests/%d/discussions", gl_project_id(info), info.pr_number)
     vim.system(
       { "glab", "api", endpoint, "--paginate" },
       {},
@@ -635,10 +636,9 @@ function M.reply_to_thread(info, thread_id, body)
     end
     return nil, "Failed to parse reply response"
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/discussions/%s/notes",
-      vim.uri_encode(project_id, "rfc2396"),
+      gl_project_id(info),
       info.pr_number,
       thread_id
     )
@@ -675,10 +675,9 @@ function M.edit_comment(info, comment_id, body)
     end
     return nil, "Failed to parse edit response"
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/notes/%d",
-      vim.uri_encode(project_id, "rfc2396"),
+      gl_project_id(info),
       info.pr_number,
       comment_id
     )
@@ -709,10 +708,9 @@ function M.delete_comment(info, comment_id)
     end
     return true, nil
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/notes/%d",
-      vim.uri_encode(project_id, "rfc2396"),
+      gl_project_id(info),
       info.pr_number,
       comment_id
     )
@@ -748,10 +746,9 @@ function M.resolve_thread(info, note, resolved)
     end
     return true, nil
   elseif info.forge == "gitlab" then
-    local project_id = info.owner .. "/" .. info.repo
     local endpoint = string.format(
       "projects/%s/merge_requests/%d/discussions/%s",
-      vim.uri_encode(project_id, "rfc2396"),
+      gl_project_id(info),
       info.pr_number,
       note.thread_id
     )
