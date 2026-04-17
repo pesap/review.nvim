@@ -204,6 +204,8 @@ local function gitlab_post(info, note, ctx)
     endpoint,
     "-X",
     "POST",
+    "-H",
+    "Content-Type: application/json",
     "--input",
     "-",
   }, json)
@@ -566,7 +568,10 @@ function M.reply_to_pr(info, body)
   elseif info.forge == "gitlab" then
     local endpoint = string.format("projects/%s/merge_requests/%d/notes", gl_project_id(info), info.pr_number)
     local json = vim.fn.json_encode({ body = body })
-    local out = vim.fn.system({ "glab", "api", endpoint, "-X", "POST", "--input", "-" }, json)
+    local out = vim.fn.system(
+      { "glab", "api", endpoint, "-X", "POST", "-H", "Content-Type: application/json", "--input", "-" },
+      json
+    )
     if vim.v.shell_error ~= 0 then
       return nil, format_api_error(out, "GitLab", "glab")
     end
@@ -639,7 +644,10 @@ function M.reply_to_thread(info, thread_id, body)
       thread_id
     )
     local json = vim.fn.json_encode({ body = body })
-    local out = vim.fn.system({ "glab", "api", endpoint, "-X", "POST", "--input", "-" }, json)
+    local out = vim.fn.system(
+      { "glab", "api", endpoint, "-X", "POST", "-H", "Content-Type: application/json", "--input", "-" },
+      json
+    )
     if vim.v.shell_error ~= 0 then
       return nil, format_api_error(out, "GitLab", "glab")
     end
@@ -674,7 +682,10 @@ function M.edit_comment(info, comment_id, body)
     local endpoint =
       string.format("projects/%s/merge_requests/%d/notes/%d", gl_project_id(info), info.pr_number, comment_id)
     local json = vim.fn.json_encode({ body = body })
-    local out = vim.fn.system({ "glab", "api", endpoint, "-X", "PUT", "--input", "-" }, json)
+    local out = vim.fn.system(
+      { "glab", "api", endpoint, "-X", "PUT", "-H", "Content-Type: application/json", "--input", "-" },
+      json
+    )
     if vim.v.shell_error ~= 0 then
       return nil, format_api_error(out, "GitLab", "glab")
     end
@@ -737,7 +748,10 @@ function M.resolve_thread(info, note, resolved)
     local endpoint =
       string.format("projects/%s/merge_requests/%d/discussions/%s", gl_project_id(info), info.pr_number, note.thread_id)
     local json = vim.fn.json_encode({ resolved = resolved })
-    local out = vim.fn.system({ "glab", "api", endpoint, "-X", "PUT", "--input", "-" }, json)
+    local out = vim.fn.system(
+      { "glab", "api", endpoint, "-X", "PUT", "-H", "Content-Type: application/json", "--input", "-" },
+      json
+    )
     if vim.v.shell_error ~= 0 then
       return false, format_api_error(out, "GitLab", "glab")
     end
