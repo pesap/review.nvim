@@ -5,6 +5,10 @@ local M = {}
 ---@class ReviewConfig
 local defaults = {
   view = "unified",
+  viewer = "native", ---@type "native"|"hunk"
+  hunk = {
+    mode = "session", ---@type "session"
+  },
   colorblind = true,
   provider = nil, ---@type string|nil  "github"|"gitlab"|nil (nil = auto-detect from remote URL)
   keymaps = {
@@ -35,10 +39,8 @@ end
 
 --- Open a review session.
 --- Usage:
----   :Review          — auto-detect: if on a branch with an open PR, open PR mode; otherwise diff against HEAD
+---   :Review          — auto-detect: if on a branch with an open PR, review against default branch; otherwise diff against HEAD
 ---   :Review HEAD~3   — local diff against HEAD~3
----   :Review pr       — open PR for current branch
----   :Review pr 123   — open PR #123
 ---@param args string[]
 function M.open(args)
   args = args or {}
@@ -55,6 +57,11 @@ function M.open(args)
   -- Check we're in a git repo
   if not git.root() then
     vim.notify("Not in a git repository", vim.log.levels.ERROR)
+    return
+  end
+
+  if M.config.viewer == "hunk" then
+    require("review.hunk").open(args)
     return
   end
 

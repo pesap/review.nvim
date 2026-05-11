@@ -2206,7 +2206,11 @@ function M.open_notes_list()
 
     if not info then
       -- No PR/MR detected, publish locally only
-      local count = state.publish_staged()
+      local url_map = {}
+      for _, note in ipairs(staged_notes) do
+        url_map[note.id] = "local"
+      end
+      local count = state.publish_staged(url_map)
       vim.notify(count .. " note(s) published locally (no PR/MR detected)", vim.log.levels.INFO)
       vim.api.nvim_win_close(list_win, true)
       M.open_notes_list()

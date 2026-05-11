@@ -123,6 +123,21 @@ index 0000000..1234567
     assert.are.equal("A", files[2].status)
   end)
 
+  it("does not create a phantom context line for trailing newline", function()
+    local input = "diff --git a/a.lua b/a.lua\n"
+      .. "--- a/a.lua\n"
+      .. "+++ b/a.lua\n"
+      .. "@@ -1 +1 @@\n"
+      .. "-old\n"
+      .. "+new\n"
+
+    local files = diff.parse(input)
+    assert.are.equal(1, #files)
+    assert.are.equal(2, #files[1].hunks[1].lines)
+    assert.are.equal("del", files[1].hunks[1].lines[1].type)
+    assert.are.equal("add", files[1].hunks[1].lines[2].type)
+  end)
+
   it("parses multiple hunks in one file", function()
     local input = [[
 diff --git a/multi.lua b/multi.lua

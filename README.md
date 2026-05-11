@@ -28,7 +28,7 @@ Minimal code review plugin for Neovim.
 - `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
 - `plenary.nvim` for tests
 
-You only need `gh` or `glab` for the forge you use.
+You only need `gh` or `glab` for the forge you use. The optional Hunk viewer requires the `hunk` CLI from `hunkdiff`.
 
 ## Install
 
@@ -58,7 +58,8 @@ vim.keymap.set("n", "<leader>rr", "<cmd>ReviewToggle<cr>", { desc = "Toggle revi
 
 ```lua
 require("review").setup({
-  view = "unified",       -- "unified" or "split"
+  view = "unified",       -- "unified" or "split" for the native viewer
+  viewer = "native",      -- "native" or "hunk" (uses the hunk CLI/session)
   colorblind = true,      -- blue/yellow scheme (default), set false for red/green
   provider = nil,         -- "github" | "gitlab" | nil (auto-detect from origin URL)
   keymaps = {
@@ -79,37 +80,53 @@ require("review").setup({
 })
 ```
 
+## Hunk viewer
+
+To use [Hunk](https://github.com/modem-dev/hunk) as the diff surface:
+
+```bash
+npm i -g hunkdiff
+```
+
+```lua
+require("review").setup({
+  viewer = "hunk",
+})
+```
+
+With `viewer = "hunk"`, `:Review` opens or reloads a Hunk session for the current repo. `:Review HEAD~3` forwards the ref to `hunk diff HEAD~3`.
+
 ## Keymaps
 
 Explorer: `<CR>` select, `q` close, `N` notes list
 
 Diff viewer:
 
-| Key | What |
-|-----|------|
-| `a` | add note (normal or visual) |
-| `S` | suggestion note (normal or visual) |
-| `e` | edit note |
-| `d` | delete note |
-| `N` | notes list |
-| `]c` / `[c` | next/prev hunk |
-| `]f` / `[f` | next/prev file |
-| `]n` / `[n` | next/prev note |
-| `s` | toggle split |
-| `q` | close |
+| Key         | What                               |
+| ----------- | ---------------------------------- |
+| `a`         | add note (normal or visual)        |
+| `S`         | suggestion note (normal or visual) |
+| `e`         | edit note                          |
+| `d`         | delete note                        |
+| `N`         | notes list                         |
+| `]c` / `[c` | next/prev hunk                     |
+| `]f` / `[f` | next/prev file                     |
+| `]n` / `[n` | next/prev note                     |
+| `s`         | toggle split                       |
+| `q`         | close                              |
 
 Notes list:
 
-| Key | What |
-|-----|------|
-| `j` / `k` | navigate between notes |
-| `<CR>` | jump to note in diff |
-| `dd` | delete note |
-| `p` | toggle draft/staged |
-| `P` | publish all staged notes |
-| `C` | clear all notes |
-| `gd` | jump to referenced note (`#<id>`) |
-| `q` | close |
+| Key       | What                              |
+| --------- | --------------------------------- |
+| `j` / `k` | navigate between notes            |
+| `<CR>`    | jump to note in diff              |
+| `dd`      | delete note                       |
+| `p`       | toggle draft/staged               |
+| `P`       | publish all staged notes          |
+| `C`       | clear all notes                   |
+| `gd`      | jump to referenced note (`#<id>`) |
+| `q`       | close                             |
 
 Note editor: `<C-s>` or `:wq` save, `<Esc>` cancel
 

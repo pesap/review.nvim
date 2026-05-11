@@ -8,11 +8,7 @@ vim.api.nvim_create_user_command("Review", function(opts)
 end, {
   nargs = "*",
   desc = "Open code review",
-  complete = function(_, cmdline, _)
-    local args = vim.split(cmdline, "%s+")
-    if #args == 2 then
-      return { "pr" }
-    end
+  complete = function()
     return {}
   end,
 })

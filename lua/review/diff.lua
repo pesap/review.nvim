@@ -107,7 +107,7 @@ function M.parse(diff_text)
           new_lnum = nil,
         })
         old_lnum = old_lnum + 1
-      elseif prefix == " " or prefix == "" then
+      elseif prefix == " " then
         -- Context line
         table.insert(current_hunk.lines, {
           type = "ctx",
