@@ -78,6 +78,12 @@ end, {
   desc = "Copy review notes to the clipboard",
 })
 
+vim.api.nvim_create_user_command("ReviewClipboardLocal", function()
+  require("review").copy_local_notes_to_clipboard()
+end, {
+  desc = "Copy local review notes to the clipboard",
+})
+
 vim.api.nvim_create_user_command("ReviewClearLocal", function()
   require("review").clear_local_notes()
 end, {

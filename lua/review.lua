@@ -479,6 +479,130 @@ local function build_export_content(session, notes)
   return table.concat(lines, "\n")
 end
 
+---@param notes ReviewNote[]
+---@return ReviewNote[], ReviewNote[], ReviewNote[]
+local function clipboard_note_sections(notes)
+  local local_notes = {}
+  local open_threads = {}
+  local discussion_notes = {}
+
+  for _, note in ipairs(notes) do
+    if note.is_general then
+      table.insert(discussion_notes, note)
+    elseif note.status == "draft" or note.status == "staged" then
+      table.insert(local_notes, note)
+    elseif note.status == "remote" and not note.resolved then
+      table.insert(open_threads, note)
+    end
+  end
+
+  sort_notes(local_notes)
+  sort_notes(open_threads)
+  sort_notes(discussion_notes)
+  return local_notes, open_threads, discussion_notes
+end
+
+---@param lines string[]
+---@param title string
+---@param notes ReviewNote[]
+local function append_clipboard_section(lines, title, notes)
+  if #notes == 0 then
+    return
+  end
+
+  table.insert(lines, "## " .. title)
+  table.insert(lines, "")
+
+  for _, note in ipairs(notes) do
+    table.insert(lines, "### " .. export_note_heading(note))
+    table.insert(lines, "")
+    table.insert(lines, "- meta: " .. table.concat(export_note_meta(note), ", "))
+    if note.url then
+      table.insert(lines, "- url: " .. note.url)
+    end
+    table.insert(lines, "")
+    table.insert(lines, note.body)
+    table.insert(lines, "")
+
+    if note.status == "remote" and note.replies and #note.replies > 1 then
+      table.insert(lines, "Replies:")
+      table.insert(lines, "")
+      for i = 2, #note.replies do
+        local reply = note.replies[i]
+        local header = "- @" .. (reply.author or "unknown")
+        if reply.created_at then
+          local date = reply.created_at:match("^(%d%d%d%d%-%d%d%-%d%d)")
+          if date then
+            header = header .. " (" .. date .. ")"
+          end
+        end
+        table.insert(lines, header)
+        table.insert(lines, "  " .. (reply.body or ""))
+      end
+      table.insert(lines, "")
+    end
+  end
+end
+
+---@param session ReviewSession
+---@param notes ReviewNote[]
+---@return string
+local function build_clipboard_content(session, notes)
+  local git = require("review.git")
+  local branch = git.current_branch() or "HEAD"
+  local local_notes, open_threads, discussion_notes = clipboard_note_sections(notes)
+  local total = #local_notes + #open_threads + #discussion_notes
+  local title = session.forge_info
+      and string.format("# Review Queue for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
+    or "# Review Queue"
+
+  local lines = {
+    title,
+    "",
+    string.format("- branch: `%s`", branch),
+    string.format("- base: `%s`", session.base_ref or "HEAD"),
+    string.format("- included: %d", total),
+    "",
+  }
+
+  append_clipboard_section(lines, "Your Notes", local_notes)
+  append_clipboard_section(lines, "Open Threads", open_threads)
+  append_clipboard_section(lines, "Discussion", discussion_notes)
+
+  return table.concat(lines, "\n")
+end
+
+---@param session ReviewSession
+---@param notes ReviewNote[]
+---@return string
+local function build_local_notes_clipboard_content(session, notes)
+  local git = require("review.git")
+  local branch = git.current_branch() or "HEAD"
+  local local_notes = {}
+  for _, note in ipairs(notes) do
+    if note.status == "draft" or note.status == "staged" then
+      table.insert(local_notes, note)
+    end
+  end
+  sort_notes(local_notes)
+
+  local title = session.forge_info
+      and string.format("# Local Review Notes for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
+    or "# Local Review Notes"
+
+  local lines = {
+    title,
+    "",
+    string.format("- branch: `%s`", branch),
+    string.format("- base: `%s`", session.base_ref or "HEAD"),
+    string.format("- included: %d", #local_notes),
+    "",
+  }
+
+  append_clipboard_section(lines, "Your Notes", local_notes)
+  return table.concat(lines, "\n")
+end
+
 ---@param content string
 ---@return string
 local function copy_to_clipboard(content)
@@ -498,8 +622,10 @@ local function copy_to_clipboard(content)
   return table.concat(copied, ", ")
 end
 
+---@param opts table|nil
 ---@return string|nil, string|nil
-function M.export_content()
+function M.export_content(opts)
+  opts = opts or {}
   local state = require("review.state")
   local s = state.get()
   if not s then
@@ -511,11 +637,29 @@ function M.export_content()
     return nil, "No notes to export"
   end
 
+  if opts.local_only then
+    local has_local = false
+    for _, note in ipairs(notes) do
+      if note.status == "draft" or note.status == "staged" then
+        has_local = true
+        break
+      end
+    end
+    if not has_local then
+      return nil, "No local notes to export"
+    end
+    return build_local_notes_clipboard_content(s, notes), nil
+  end
+
+  if opts.clipboard then
+    return build_clipboard_content(s, notes), nil
+  end
+
   return build_export_content(s, notes), nil
 end
 
 function M.copy_notes_to_clipboard()
-  local content, err = M.export_content()
+  local content, err = M.export_content({ clipboard = true })
   if not content then
     vim.notify(err, err == "No active review session" and vim.log.levels.ERROR or vim.log.levels.INFO)
     return
@@ -523,6 +667,17 @@ function M.copy_notes_to_clipboard()
 
   local target = copy_to_clipboard(content)
   vim.notify("Notes copied to clipboard register(s): " .. target, vim.log.levels.INFO)
+end
+
+function M.copy_local_notes_to_clipboard()
+  local content, err = M.export_content({ local_only = true })
+  if not content then
+    vim.notify(err, err == "No active review session" and vim.log.levels.ERROR or vim.log.levels.INFO)
+    return
+  end
+
+  local target = copy_to_clipboard(content)
+  vim.notify("Local notes copied to clipboard register(s): " .. target, vim.log.levels.INFO)
 end
 
 function M.clear_local_notes()

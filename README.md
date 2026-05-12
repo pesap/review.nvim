@@ -54,6 +54,7 @@ lazy.nvim:
 :ReviewSuggestion    " add suggestion at current Hunk location
 :ReviewExport        " export notes to markdown
 :ReviewClipboard     " copy all notes to the clipboard
+:ReviewClipboardLocal " copy only local notes to the clipboard
 :ReviewClearLocal    " clear all local notes after confirmation
 ```
 
@@ -187,7 +188,8 @@ Hunk viewer:
 | `:ReviewComment` | add a note at the selected Hunk |
 | `:ReviewSuggestion` | add a suggestion at the selected Hunk |
 | `:ReviewNotes` | open the notes list |
-| `:ReviewClipboard` | copy all notes and remote threads to the clipboard |
+| `:ReviewClipboard` | copy local notes, open threads, and discussion items to the clipboard |
+| `:ReviewClipboardLocal` | copy only local draft/staged notes to the clipboard |
 | `:ReviewClearLocal` | clear all local notes after confirmation |
 | `:ReviewRefresh` | re-fetch PR/MR comments and re-sync the Hunk overlay |
 
@@ -200,7 +202,8 @@ Notes list:
 | `dd`      | delete note                       |
 | `s`       | toggle draft/staged               |
 | `P`       | publish all staged notes          |
-| `y`       | copy all notes to the clipboard   |
+| `y`       | copy local notes, open threads, and discussion items |
+| `Y`       | copy only local draft/staged notes |
 | `C`       | clear all local notes             |
 | `gd`      | jump to referenced note (`#<id>`) |
 | `?`       | help                              |
@@ -218,7 +221,9 @@ Notes go through three stages:
 
 Notes persist across sessions automatically. Reference other notes by typing `#<id>` in the note body (e.g., `see #1 for context`). Referenced notes are highlighted and navigable with `gd`.
 
-Use `:ReviewClipboard` or `y` from the notes list to copy the full current review bundle, including local notes and remote GitHub/GitLab threads, into your clipboard for LLM handoff.
+Use `:ReviewClipboard` or `y` from the notes list to copy the actionable review queue into your clipboard for LLM handoff: local notes, open threads, and discussion items. Resolved threads are left out.
+
+Use `:ReviewClipboardLocal` or `Y` if you only want your own local draft/staged notes.
 
 ## Inspiration
 

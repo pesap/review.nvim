@@ -3234,6 +3234,7 @@ function M.open_notes_list()
     "s stage",
     "P publish",
     "y clipboard",
+    "Y local",
     "R refresh",
     "C clear local",
     "b url",
@@ -3426,6 +3427,10 @@ function M.open_notes_list()
 
   vim.keymap.set("n", "y", function()
     require("review").copy_notes_to_clipboard()
+  end, buf_opts)
+
+  vim.keymap.set("n", "Y", function()
+    require("review").copy_local_notes_to_clipboard()
   end, buf_opts)
 
   vim.keymap.set("n", "C", function()
@@ -3714,6 +3719,7 @@ function M.open_help()
   add_item(":ReviewHelp", "Open this help")
   add_item(":ReviewNotes", "Open the notes list")
   add_item(":ReviewClipboard", "Copy all notes and threads to the clipboard")
+  add_item(":ReviewClipboardLocal", "Copy only local notes to the clipboard")
   add_item(":ReviewClearLocal", "Clear all local notes after confirmation")
   add_item(":ReviewRefresh", "Refresh remote PR/MR comments")
   add_item(":ReviewHunk [ref]", "Open or reload Hunk")
@@ -3755,6 +3761,7 @@ function M.open_help()
   add_item("s", "Toggle draft/staged")
   add_item("P", "Publish staged notes")
   add_item("y", "Copy all notes to the clipboard")
+  add_item("Y", "Copy only local notes to the clipboard")
   add_item("R", "Refresh remote comments")
   add_item("C", "Clear all local notes")
   add_item("gd", "Jump to #note references")

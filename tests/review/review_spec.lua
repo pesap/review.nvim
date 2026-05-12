@@ -56,7 +56,7 @@ describe("review note export and clearing", function()
     package.loaded["review.storage"] = original_storage_module
   end)
 
-  it("builds clipboard export content for local notes and remote threads", function()
+  it("builds clipboard export content for local notes, open threads, and discussion only", function()
     state.add_note("lua/review.lua", 12, "Local draft body", nil, "new")
     local local_note = state.get_notes("lua/review.lua")[1]
     state.toggle_staged(local_note.id)
@@ -72,21 +72,43 @@ describe("review note export and clearing", function()
         },
         resolved = false,
       },
+      {
+        file_path = "lua/resolved.lua",
+        line = 8,
+        side = "new",
+        replies = {
+          { body = "Resolved body", author = "octocat", created_at = "2026-05-11T09:00:00Z" },
+        },
+        resolved = true,
+      },
+      {
+        file_path = nil,
+        line = nil,
+        side = nil,
+        is_general = true,
+        replies = {
+          { body = "General discussion body", author = "octocat", created_at = "2026-05-11T08:00:00Z" },
+        },
+        resolved = false,
+      },
     })
 
-    local content, err = review.export_content()
+    local content, err = review.export_content({ clipboard = true })
     assert.is_nil(err)
-    assert.is_true(content:match("# Review Notes for github #12") ~= nil)
+    assert.is_true(content:match("# Review Queue for github #12") ~= nil)
     assert.is_true(content:match("- branch: `feature/export%-notes`") ~= nil)
-    assert.is_true(content:match("## lua/review.lua") ~= nil)
+    assert.is_true(content:match("## Your Notes") ~= nil)
     assert.is_true(content:match("### lua/review.lua:12 new") ~= nil)
     assert.is_true(content:match("- meta: staged, comment") ~= nil)
     assert.is_true(content:match("Local draft body") ~= nil)
-    assert.is_true(content:match("## lua/ui.lua") ~= nil)
+    assert.is_true(content:match("## Open Threads") ~= nil)
     assert.is_true(content:match("- meta: remote, comment, open, by @octocat") ~= nil)
     assert.is_true(content:match("- url: https://example.com/thread") ~= nil)
     assert.is_true(content:match("Replies:") ~= nil)
     assert.is_true(content:match("@psanchez %(2026%-05%-11%)") ~= nil)
+    assert.is_true(content:match("## Discussion") ~= nil)
+    assert.is_true(content:match("General discussion body") ~= nil)
+    assert.is_nil(content:match("Resolved body"))
   end)
 
   it("copies exported notes to clipboard registers", function()
@@ -100,6 +122,33 @@ describe("review note export and clearing", function()
     assert.are.same(copied['"'], copied["+"])
     assert.are.same(copied['"'], copied["*"])
     assert.is_true(copied['"']:match("Clipboard body") ~= nil)
+  end)
+
+  it("copies only local notes to clipboard registers", function()
+    state.add_note("lua/review.lua", 12, "Local only body", nil, "new")
+    state.load_remote_comments({
+      {
+        file_path = "lua/ui.lua",
+        line = 4,
+        side = "new",
+        replies = {
+          { body = "Remote top-level body", author = "octocat" },
+        },
+        resolved = false,
+      },
+    })
+    vim.fn.setreg = function(register, value)
+      copied[register] = value
+    end
+
+    review.copy_local_notes_to_clipboard()
+
+    assert.are.same(copied['"'], copied["+"])
+    assert.are.same(copied['"'], copied["*"])
+    assert.is_true(copied['"']:match("Local only body") ~= nil)
+    assert.is_true(copied['"']:match("## Your Notes") ~= nil)
+    assert.is_nil(copied['"']:match("Open Threads"))
+    assert.is_nil(copied['"']:match("Remote top%-level body"))
   end)
 
   it("requires confirmation before clearing local notes", function()

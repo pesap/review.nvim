@@ -122,6 +122,11 @@ You can also set up a keymap to toggle the review panel: >lua
                                                           *:ReviewClipboard*
 :ReviewClipboard        Copy all current notes and remote threads to the
                         clipboard for sharing with an LLM or another tool.
+                        This includes local notes, open threads, and
+                        discussion items, but skips resolved threads.
+
+                                                     *:ReviewClipboardLocal*
+:ReviewClipboardLocal   Copy only local draft/staged notes to the clipboard.
 
                                                          *:ReviewClearLocal*
 :ReviewClearLocal       Clear all local draft/staged notes after confirmation.
@@ -166,7 +171,9 @@ Hunk workflow:~
     :ReviewComment       Add a note at the selected Hunk.
     :ReviewSuggestion    Add a suggestion at the selected Hunk.
     :ReviewNotes         Open the notes list to stage/publish notes.
-    :ReviewClipboard     Copy all notes and threads to the clipboard.
+    :ReviewClipboard     Copy local notes, open threads, and discussion.
+    :ReviewClipboardLocal
+                        Copy only local draft/staged notes.
     :ReviewClearLocal    Clear local notes after confirmation.
     :ReviewRefresh       Re-fetch PR/MR comments and re-sync them into Hunk.
 
@@ -192,7 +199,8 @@ Notes list (N):~
     dd          Delete the note.
     s           Toggle the note between draft and staged.
     P           Publish all staged notes.
-    y           Copy all notes and threads to the clipboard.
+    y           Copy local notes, open threads, and discussion.
+    Y           Copy only local draft/staged notes.
     C           Clear all local notes after confirmation.
     gd          Jump to a referenced note (`#<id>` in the note body).
     ?           Open review help.

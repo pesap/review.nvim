@@ -3,6 +3,7 @@
 :ReviewClose	review.txt	/*:ReviewClose*
 :ReviewClearLocal	review.txt	/*:ReviewClearLocal*
 :ReviewClipboard	review.txt	/*:ReviewClipboard*
+:ReviewClipboardLocal	review.txt	/*:ReviewClipboardLocal*
 :ReviewExport	review.txt	/*:ReviewExport*
 :ReviewHelp	review.txt	/*:ReviewHelp*
 :ReviewHunk	review.txt	/*:ReviewHunk*
