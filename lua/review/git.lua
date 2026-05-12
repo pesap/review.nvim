@@ -243,11 +243,12 @@ function M.status_sections()
           table.insert(cmd, entry.path)
           local diff_text = run_system(cmd) or ""
           local parsed = diff_mod.parse(diff_text)
-          local file = parsed[1] or {
-            path = entry.path,
-            status = section_status(section, entry),
-            hunks = {},
-          }
+          local file = parsed[1]
+            or {
+              path = entry.path,
+              status = section_status(section, entry),
+              hunks = {},
+            }
           file.path = file.path ~= "" and file.path or entry.path
           file.status = section_status(section, entry)
           file.git_section = section
@@ -270,7 +271,7 @@ build_untracked_file = function(path)
   local ok, lines = pcall(vim.fn.readfile, abs_path)
   if not ok or type(lines) ~= "table" then
     lines = { "[unreadable file]" }
-end
+  end
 
   local hunk_lines = {}
   for idx, text in ipairs(lines) do

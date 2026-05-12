@@ -2325,7 +2325,6 @@ local function explorer_entry_under_cursor()
   return explorer_line_map[cursor[1]]
 end
 
-
 --- Set up keymaps for the explorer buffer.
 ---@param buf number
 local function setup_explorer_keymaps(buf)
