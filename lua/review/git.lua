@@ -3,12 +3,16 @@ local M = {}
 
 local cached_root = nil
 local cached_head_exists = nil
+local cached_gitbutler_workspace = nil
 local build_untracked_file
 
 ---@param cmd string[]
 ---@return string[]|nil out
 ---@return string|nil err
 local function run_systemlist(cmd)
+  if not cmd[1] or vim.fn.executable(cmd[1]) ~= 1 then
+    return nil, string.format("%s is not executable", cmd[1] or "command")
+  end
   local out = vim.fn.systemlist(cmd)
   if vim.v.shell_error ~= 0 then
     return nil, table.concat(out or {}, "\n")
@@ -20,6 +24,9 @@ end
 ---@return string|nil out
 ---@return string|nil err
 local function run_system(cmd)
+  if not cmd[1] or vim.fn.executable(cmd[1]) ~= 1 then
+    return nil, string.format("%s is not executable", cmd[1] or "command")
+  end
   local out = vim.fn.system(cmd)
   if vim.v.shell_error ~= 0 then
     return nil, out
@@ -315,6 +322,26 @@ function M.has_fugitive()
   return vim.fn.exists(":Git") == 2
 end
 
+---@return boolean
+function M.is_gitbutler_workspace()
+  if cached_gitbutler_workspace ~= nil then
+    return cached_gitbutler_workspace
+  end
+  if not M.root() then
+    cached_gitbutler_workspace = false
+    return false
+  end
+  local out = run_systemlist({ "but", "status", "-fv" })
+  cached_gitbutler_workspace = out ~= nil
+  return cached_gitbutler_workspace
+end
+
+---@return string[]|nil
+---@return string|nil
+function M.gitbutler_status_lines()
+  return run_systemlist({ "but", "status", "-fv" })
+end
+
 ---@return {buf:number, win:number}|nil
 ---@return string|nil
 function M.open_fugitive_status()
@@ -353,10 +380,7 @@ function M.open_fugitive_status()
     end
   end
 
-  return {
-    buf = current_buf,
-    win = vim.api.nvim_get_current_win(),
-  }, nil
+  return nil, "vim-fugitive did not open a Fugitive buffer"
 end
 
 --- List commits in a range.
@@ -543,6 +567,7 @@ function M.invalidate_cache()
   cached_root = nil
   cached_default_branch = nil
   cached_head_exists = nil
+  cached_gitbutler_workspace = nil
 end
 
 return M

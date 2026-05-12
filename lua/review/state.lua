@@ -149,6 +149,10 @@ end
 ---@field remote_id number|nil
 
 ---@class ReviewUIState
+---@field files_buf number|nil
+---@field files_win number|nil
+---@field threads_buf number|nil
+---@field threads_win number|nil
 ---@field explorer_buf number|nil
 ---@field explorer_win number|nil
 ---@field diff_buf number|nil

@@ -231,3 +231,152 @@ describe("review note targets", function()
     }, target)
   end)
 end)
+
+describe("review open session metadata", function()
+  local review
+  local state
+  local original_review_module
+  local original_state_module
+  local original_git_module
+  local original_ui_module
+  local original_forge_module
+  local original_storage_module
+
+  before_each(function()
+    original_review_module = package.loaded["review"]
+    original_state_module = package.loaded["review.state"]
+    original_git_module = package.loaded["review.git"]
+    original_ui_module = package.loaded["review.ui"]
+    original_forge_module = package.loaded["review.forge"]
+    original_storage_module = package.loaded["review.storage"]
+
+    package.loaded["review"] = nil
+    package.loaded["review.state"] = nil
+    package.loaded["review.git"] = {
+      invalidate_cache = function() end,
+      root = function()
+        return "/tmp/review-spec"
+      end,
+      default_branch = function()
+        return "main"
+      end,
+      current_branch = function()
+        return "feature/git-rail"
+      end,
+      diff = function(ref)
+        if ref == "main" then
+          return table.concat({
+            "diff --git a/lua/review.lua b/lua/review.lua",
+            "index 1111111..2222222 100644",
+            "--- a/lua/review.lua",
+            "+++ b/lua/review.lua",
+            "@@ -1 +1 @@",
+            "-before",
+            "+after",
+            "",
+          }, "\n")
+        end
+        return ""
+      end,
+      untracked_files = function()
+        return {}
+      end,
+      log = function()
+        return {}
+      end,
+    }
+    package.loaded["review.ui"] = {
+      open = function() end,
+      close = function() end,
+    }
+    package.loaded["review.forge"] = {
+      get_cached_detect = function()
+        return nil
+      end,
+      detect_async = function() end,
+    }
+    package.loaded["review.storage"] = {
+      load = function()
+        return {}
+      end,
+      save = function() end,
+      load_remote_bundle = function()
+        return nil
+      end,
+      save_remote_bundle = function() end,
+    }
+
+    review = require("review")
+    state = require("review.state")
+    review.setup({})
+  end)
+
+  after_each(function()
+    if state and state.get() then
+      state.destroy()
+    end
+    package.loaded["review"] = original_review_module
+    package.loaded["review.state"] = original_state_module
+    package.loaded["review.git"] = original_git_module
+    package.loaded["review.ui"] = original_ui_module
+    package.loaded["review.forge"] = original_forge_module
+    package.loaded["review.storage"] = original_storage_module
+  end)
+
+  it("keeps requested_ref nil for implicit local reviews against the default branch", function()
+    local opened = review.open({})
+
+    assert.is_nil(opened)
+    assert.are.equal("main", state.get().base_ref)
+    assert.is_nil(state.get().requested_ref)
+  end)
+
+  it("refreshes a local session in place without changing the requested ref semantics", function()
+    local git_module = package.loaded["review.git"]
+
+    state.create("local", "main", {
+      { path = "lua/old.lua", status = "M", hunks = {} },
+    }, {
+      requested_ref = nil,
+      branch = "feature/git-rail",
+      repo_root = "/tmp/review-spec",
+      untracked_files = {},
+    })
+
+    git_module.invalidate_cache = function() end
+    git_module.root = function()
+      return "/tmp/review-spec"
+    end
+    git_module.current_branch = function()
+      return "feature/git-rail"
+    end
+    git_module.diff = function(ref)
+      assert.are.equal("main", ref)
+      return table.concat({
+        "diff --git a/lua/new.lua b/lua/new.lua",
+        "index 1111111..2222222 100644",
+        "--- a/lua/new.lua",
+        "+++ b/lua/new.lua",
+        "@@ -1 +1 @@",
+        "-before",
+        "+after",
+        "",
+      }, "\n")
+    end
+    git_module.untracked_files = function()
+      return {}
+    end
+    git_module.log = function(ref)
+      assert.are.equal("main", ref)
+      return {
+        { sha = "abc123456789", short_sha = "abc1234", message = "Refresh commit", author = "psanchez" },
+      }
+    end
+
+    assert.is_true(review.refresh_local_session())
+    assert.are.equal("main", state.get().base_ref)
+    assert.is_nil(state.get().requested_ref)
+    assert.are.equal("lua/new.lua", state.get().files[1].path)
+    assert.are.equal(1, #state.get().commits)
+  end)
+end)

@@ -128,7 +128,7 @@ function M.setup_highlights(colorblind)
   set(0, HL.explorer_path, { fg = "#7f848e", italic = true })
   set(0, HL.explorer_active, { fg = colorblind and "#88c0ff" or "#61afef", bold = true })
   set(0, HL.explorer_active_row, { bg = "#16202b" })
-  set(0, HL.status_m, { fg = colorblind and "#cc79a7" or "#e5c07b" })
+  set(0, HL.status_m, { fg = colorblind and "#d8c14a" or "#e5c07b" })
   set(0, HL.note_sign, { fg = colorblind and "#cc79a7" or "#c678dd", bold = true })
   set(0, HL.commit, { fg = colorblind and "#d9a441" or "#d19a66" })
   set(0, HL.commit_active, { fg = colorblind and "#ebcb8b" or "#e5c07b", bold = true })
@@ -319,6 +319,7 @@ local function apply_review_window_style(win, kind)
     HL.cursorline,
   })
   vim.wo[win].fillchars = "eob: "
+  vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = win })
 end
 
 ---@param win number
@@ -330,6 +331,7 @@ local function apply_git_window_style(win)
   vim.wo[win].wrap = false
   vim.wo[win].cursorline = true
   vim.wo[win].cursorlineopt = "line"
+  vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = win })
 end
 
 ---@param buf number
@@ -351,6 +353,24 @@ local function render_missing_fugitive_buffer(buf)
   vim.api.nvim_buf_add_highlight(buf, ns, HL.panel_title, 0, 1, -1)
   vim.api.nvim_buf_add_highlight(buf, ns, HL.panel_meta, 2, 1, -1)
   vim.api.nvim_buf_add_highlight(buf, ns, HL.meta, 4, 1, -1)
+end
+
+---@param buf number
+---@param lines string[]|nil
+---@param err string|nil
+local function render_gitbutler_buffer(buf, lines, err)
+  local content = lines
+  if not content or #content == 0 then
+    content = {
+      " GitButler status unavailable.",
+      "",
+      err and (" " .. vim.trim(err)) or " No GitButler status output.",
+    }
+  end
+
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
+  vim.bo[buf].modifiable = false
 end
 
 ---@param buf number
@@ -424,7 +444,8 @@ end
 -- Explorer line type map: tracks what each line in the explorer represents.
 -- Stored per-render so keymaps can resolve cursor position.
 ---@type table[]|nil  Each: {type: "header"|"separator"|"commit"|"file"|"folder", idx: number|nil}
-local explorer_line_map = nil
+local files_line_map = nil
+local threads_line_map = nil
 
 ---@return ReviewFile|nil
 local function current_display_file()
@@ -438,25 +459,31 @@ local function worktree_git_enabled()
 end
 
 ---@param buf number
-local function setup_git_keymaps(buf)
-  local opts = { buffer = buf, noremap = true, silent = true }
+---@param opts table|nil
+local function setup_git_keymaps(buf, opts)
+  opts = opts or {}
+  local keymap_opts = { buffer = buf, noremap = true, silent = true }
   local km = require("review").config.keymaps
 
   vim.keymap.set("n", km.close, function()
     M.close()
-  end, opts)
+  end, keymap_opts)
 
   vim.keymap.set("n", km.help, function()
     M.open_help()
-  end, opts)
+  end, keymap_opts)
+
+  if not opts.allow_navigation then
+    return
+  end
 
   vim.keymap.set("n", km.focus_files, function()
     M.focus_section("files")
-  end, opts)
+  end, keymap_opts)
 
   vim.keymap.set("n", km.focus_threads, function()
     M.focus_section("threads")
-  end, opts)
+  end, keymap_opts)
 end
 
 local function sync_local_review_state()
@@ -468,18 +495,17 @@ end
 
 ---@param ui_state ReviewUIState
 local function ensure_git_status_pane(ui_state)
-  if not worktree_git_enabled() then
+  if not worktree_git_enabled() or (ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win)) then
     return
   end
-  if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
-    return
-  end
-  if not ui_state.explorer_win or not vim.api.nvim_win_is_valid(ui_state.explorer_win) then
+  local git_mod = require("review.git")
+  local anchor_win = ui_state.threads_win or ui_state.files_win or ui_state.explorer_win
+  if not anchor_win or not vim.api.nvim_win_is_valid(anchor_win) then
     return
   end
 
   local original_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_set_current_win(ui_state.explorer_win)
+  vim.api.nvim_set_current_win(anchor_win)
   vim.cmd("belowright split")
 
   local git_win = vim.api.nvim_get_current_win()
@@ -487,7 +513,22 @@ local function ensure_git_status_pane(ui_state)
   vim.api.nvim_win_set_height(git_win, pane_height)
   apply_git_window_style(git_win)
 
-  local git_mod = require("review.git")
+  if git_mod.is_gitbutler_workspace and git_mod.is_gitbutler_workspace() then
+    local gitbutler_buf = create_buf("review://gitbutler", { filetype = "review-git" })
+    local lines, err = git_mod.gitbutler_status_lines()
+    vim.api.nvim_win_set_buf(git_win, gitbutler_buf)
+    render_gitbutler_buffer(gitbutler_buf, lines, err)
+    ui_state.git_win = git_win
+    ui_state.git_buf = gitbutler_buf
+    vim.b[gitbutler_buf].review_git_pane = true
+    setup_git_keymaps(gitbutler_buf, { allow_navigation = true })
+    attach_review_quit_guard(gitbutler_buf)
+    if vim.api.nvim_win_is_valid(original_win) then
+      vim.api.nvim_set_current_win(original_win)
+    end
+    return
+  end
+
   local opened, err = git_mod.open_fugitive_status()
   if opened then
     if opened.win ~= git_win and vim.api.nvim_win_is_valid(git_win) and vim.api.nvim_buf_is_valid(opened.buf) then
@@ -500,12 +541,14 @@ local function ensure_git_status_pane(ui_state)
     ui_state.git_win = opened.win
     ui_state.git_buf = opened.buf
     vim.b[opened.buf].review_git_pane = true
+    setup_git_keymaps(opened.buf)
   else
     local fallback_buf = create_buf("review://git", { filetype = "markdown" })
     vim.api.nvim_win_set_buf(git_win, fallback_buf)
     render_missing_fugitive_buffer(fallback_buf)
     ui_state.git_win = git_win
     ui_state.git_buf = fallback_buf
+    setup_git_keymaps(fallback_buf, { allow_navigation = true })
     if err and err ~= "" then
       vim.schedule(function()
         vim.notify(vim.trim(err), vim.log.levels.WARN)
@@ -517,7 +560,6 @@ local function ensure_git_status_pane(ui_state)
     apply_git_window_style(ui_state.git_win)
   end
   if ui_state.git_buf and vim.api.nvim_buf_is_valid(ui_state.git_buf) then
-    setup_git_keymaps(ui_state.git_buf)
     attach_review_quit_guard(ui_state.git_buf)
   end
 
@@ -936,8 +978,9 @@ end
 current_navigator_width = function()
   local ui = state.get_ui()
   if ui then
-    if ui.explorer_win and vim.api.nvim_win_is_valid(ui.explorer_win) then
-      return vim.api.nvim_win_get_width(ui.explorer_win)
+    local files_win = ui.files_win or ui.explorer_win
+    if files_win and vim.api.nvim_win_is_valid(files_win) then
+      return vim.api.nvim_win_get_width(files_win)
     end
     if ui.explorer_width and ui.explorer_width > 0 then
       return ui.explorer_width
@@ -1222,17 +1265,17 @@ end
 ---@return number|nil
 local function navigator_selection_line()
   local s = state.get()
-  if not s or not explorer_line_map then
+  if not s or not files_line_map then
     return nil
   end
 
-  for line_nr, entry in ipairs(explorer_line_map) do
+  for line_nr, entry in ipairs(files_line_map) do
     if entry.type == "file" and entry.idx == s.current_file_idx then
       return line_nr
     end
   end
 
-  for line_nr, entry in ipairs(explorer_line_map) do
+  for line_nr, entry in ipairs(files_line_map) do
     if entry.type == "commit" and entry.idx == s.current_commit_idx then
       return line_nr
     end
@@ -1244,15 +1287,16 @@ end
 ---@param section string
 ---@return number|nil
 local function section_line(section)
-  if not explorer_line_map then
+  local line_map = (section == "threads" or section == "stale") and threads_line_map or files_line_map
+  if not line_map then
     return nil
   end
-  for line_nr, entry in ipairs(explorer_line_map) do
-    if entry.section == section and entry.type ~= "header" then
+  for line_nr, entry in ipairs(line_map) do
+    if entry.section == section and entry.type ~= "header" and entry.type ~= "separator" then
       return line_nr
     end
   end
-  for line_nr, entry in ipairs(explorer_line_map) do
+  for line_nr, entry in ipairs(line_map) do
     if entry.type == "header" and entry.section == section then
       return line_nr
     end
@@ -1262,18 +1306,21 @@ end
 
 ---@param section string
 function M.focus_section(section)
-  sync_local_review_state()
-  M.refresh()
   local ui_state = state.get_ui()
-  if not ui_state or not ui_state.explorer_win or not vim.api.nvim_win_is_valid(ui_state.explorer_win) then
+  local target_win = (section == "threads" or section == "stale") and ui_state and ui_state.threads_win
+    or ui_state and ui_state.files_win
+  if not target_win and ui_state then
+    target_win = ui_state.explorer_win
+  end
+  if not ui_state or not target_win or not vim.api.nvim_win_is_valid(target_win) then
     return
   end
   local line_nr = section_line(section)
   if not line_nr then
     return
   end
-  vim.api.nvim_set_current_win(ui_state.explorer_win)
-  vim.api.nvim_win_set_cursor(ui_state.explorer_win, { line_nr, 0 })
+  vim.api.nvim_set_current_win(target_win)
+  vim.api.nvim_win_set_cursor(target_win, { line_nr, 0 })
 end
 
 function M.focus_git()
@@ -1298,7 +1345,11 @@ local function update_window_chrome()
 
   if ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win) then
     vim.wo[ui_state.explorer_win].winbar = ""
-    vim.wo[ui_state.explorer_win].statusline = ""
+    vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = ui_state.explorer_win })
+  end
+  if ui_state.threads_win and vim.api.nvim_win_is_valid(ui_state.threads_win) then
+    vim.wo[ui_state.threads_win].winbar = ""
+    vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = ui_state.threads_win })
   end
 
   if ui_state.diff_win and vim.api.nvim_win_is_valid(ui_state.diff_win) then
@@ -1438,7 +1489,7 @@ end
 
 --- Render the file explorer buffer.
 ---@param buf number
-local function render_explorer(buf)
+local function render_files_pane(buf)
   local s = state.get()
   if not s then
     return
@@ -1446,7 +1497,7 @@ local function render_explorer(buf)
 
   local lines = {}
   local highlights = {}
-  explorer_line_map = {}
+  files_line_map = {}
 
   local active_files = state.active_files()
   local branch_line, base_line = navigator_context_lines()
@@ -1470,13 +1521,13 @@ local function render_explorer(buf)
 
   local function add_separator(section)
     table.insert(lines, " " .. string.rep("─", math.max(8, explorer_width - 3)))
-    table.insert(explorer_line_map, { type = "separator", section = section })
+    table.insert(files_line_map, { type = "separator", section = section })
     table.insert(highlights, { line = #lines - 1, hl = HL.note_separator, col_start = 1, col_end = -1 })
   end
 
   local function add_section_header(section, label, hl)
     table.insert(lines, header_indent .. label)
-    table.insert(explorer_line_map, { type = "header", section = section })
+    table.insert(files_line_map, { type = "header", section = section })
     table.insert(highlights, { line = #lines - 1, hl = hl, col_start = 1, col_end = -1 })
   end
 
@@ -1500,7 +1551,7 @@ local function render_explorer(buf)
       local line = string.format("%s%s %s", file_indent, file.status, basename)
 
       table.insert(lines, line)
-      table.insert(explorer_line_map, { type = "file", idx = entry.idx, section = section })
+      table.insert(files_line_map, { type = "file", idx = entry.idx, section = section })
       local li = #lines - 1
       if is_active then
         table.insert(highlights, {
@@ -1530,87 +1581,12 @@ local function render_explorer(buf)
     end
   end
 
-  local function add_thread_sections(section_name, sections, row_type)
-    if #sections == 0 then
-      return
-    end
-
-    if #lines > 0 then
-      add_separator(section_name)
-    end
-    add_section_header(
-      section_name,
-      section_name == "stale" and "Stale" or "Threads",
-      section_name == "stale" and HL.note_separator or HL.threads_header
-    )
-
-    for _, section in ipairs(sections) do
-      local max_badge_width = 0
-      for _, row in ipairs(section.rows) do
-        max_badge_width = math.max(max_badge_width, #string.format("[%d]", row.count))
-      end
-
-      table.insert(lines, thread_group_indent .. section.label)
-      table.insert(explorer_line_map, { type = "header", section = section_name })
-      table.insert(highlights, {
-        line = #lines - 1,
-        hl = section.label == "local/" and HL.local_group or HL.vendor_group,
-        col_start = 3,
-        col_end = -1,
-      })
-
-      for _, row in ipairs(section.rows) do
-        local fname = row.path:match("([^/]+)$") or row.path
-        local badge = string.format("[%d]", row.count)
-        local commit_suffix = ""
-        if row.commit_short_sha and state.scope_mode() == "all" then
-          commit_suffix = " @" .. row.commit_short_sha
-        end
-        local name_budget = math.max(row_budget - max_badge_width - #thread_row_indent - #commit_suffix - 1, 8)
-        local short_name = truncate_middle_text(fname, name_budget)
-        local gap = math.max(1, name_budget - vim.fn.strdisplaywidth(short_name) + 1)
-        local thread_line =
-          string.format("%s%s%s%s%s", thread_row_indent, short_name, string.rep(" ", gap), badge, commit_suffix)
-        table.insert(lines, thread_line)
-        table.insert(explorer_line_map, {
-          type = row_type,
-          file_path = row.path,
-          line = row.note and row.note.line or nil,
-          side = row.note and row.note.side or "new",
-          source = row.note and row.note.status or row.source,
-          note_id = row.note and row.note.id or nil,
-          section = section_name,
-        })
-        local li = #lines - 1
-        local source_hl = (row.note and row.note.status == "remote") and HL.note_remote or HL.note_sign
-        local name_start = thread_line:find(short_name, 1, true)
-        if name_start then
-          table.insert(highlights, {
-            line = li,
-            hl = HL.explorer_file,
-            col_start = name_start - 1,
-            col_end = name_start - 1 + #short_name,
-          })
-        end
-        local badge_start = thread_line:find("[", 1, true)
-        if badge_start then
-          table.insert(highlights, {
-            line = li,
-            hl = source_hl,
-            col_start = badge_start - 1,
-            col_end = -1,
-          })
-        end
-      end
-    end
-  end
-
   table.insert(lines, branch_line)
-  table.insert(explorer_line_map, { type = "header", section = "context" })
+  table.insert(files_line_map, { type = "header", section = "context" })
   table.insert(highlights, { line = #lines - 1, hl = HL.explorer_active, col_start = 1, col_end = -1 })
   if base_line then
     table.insert(lines, base_line)
-    table.insert(explorer_line_map, { type = "header", section = "context" })
+    table.insert(files_line_map, { type = "header", section = "context" })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = 9 })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 9, col_end = -1 })
   end
@@ -1621,7 +1597,7 @@ local function render_explorer(buf)
     truncate_end_text(active_scope_label(), math.max(explorer_width - 9, 8))
   )
   table.insert(lines, scope_line)
-  table.insert(explorer_line_map, { type = "header", section = "scope" })
+  table.insert(files_line_map, { type = "header", section = "scope" })
   table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 1, col_end = 6 })
   table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 7, col_end = -1 })
 
@@ -1629,7 +1605,7 @@ local function render_explorer(buf)
     local label = truncate_end_text(row.label, math.max(explorer_width - 4, 8))
     local line = scope_indent .. label
     table.insert(lines, line)
-    table.insert(explorer_line_map, {
+    table.insert(files_line_map, {
       type = row.type,
       idx = row.idx,
       commit = row.commit,
@@ -1656,7 +1632,7 @@ local function render_explorer(buf)
 
   local files_header = string.format("%sFiles  +%d  -%d", header_indent, additions, deletions)
   table.insert(lines, files_header)
-  table.insert(explorer_line_map, { type = "header", section = "files" })
+  table.insert(files_line_map, { type = "header", section = "files" })
   table.insert(highlights, { line = #lines - 1, hl = HL.file_header, col_start = 1, col_end = 6 })
   local plus_str = "+" .. tostring(additions)
   local minus_str = "-" .. tostring(deletions)
@@ -1689,17 +1665,138 @@ local function render_explorer(buf)
 
   if #active_files == 0 then
     table.insert(lines, "  (no files)")
-    table.insert(explorer_line_map, { type = "separator", section = "files" })
+    table.insert(files_line_map, { type = "separator", section = "files" })
   end
-
-  add_thread_sections("threads", build_thread_sections(active_files), "thread")
-  add_thread_sections("stale", build_stale_sections(), "stale")
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
   local ns = vim.api.nvim_create_namespace("review_explorer")
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  for _, h in ipairs(highlights) do
+    vim.api.nvim_buf_add_highlight(buf, ns, h.hl, h.line, h.col_start, h.col_end)
+  end
+end
+
+local function render_threads_pane(buf)
+  local s = state.get()
+  if not s then
+    return
+  end
+
+  local lines = {}
+  local highlights = {}
+  threads_line_map = {}
+  local explorer_width = current_navigator_width()
+  local row_budget = math.max(explorer_width - 7, 10)
+  local thread_group_indent = "   "
+  local thread_row_indent = "     "
+  local active_files = state.active_files()
+
+  local function add_separator(section)
+    table.insert(lines, " " .. string.rep("─", math.max(8, explorer_width - 3)))
+    table.insert(threads_line_map, { type = "separator", section = section })
+    table.insert(highlights, { line = #lines - 1, hl = HL.note_separator, col_start = 1, col_end = -1 })
+  end
+
+  local function add_section_header(section, label, hl)
+    table.insert(lines, " " .. label)
+    table.insert(threads_line_map, { type = "header", section = section })
+    table.insert(highlights, { line = #lines - 1, hl = hl, col_start = 1, col_end = -1 })
+  end
+
+  local function add_thread_sections(section_name, sections, row_type)
+    if #sections == 0 then
+      return
+    end
+
+    if #lines > 0 then
+      add_separator(section_name)
+    end
+    add_section_header(
+      section_name,
+      section_name == "stale" and "Stale" or "Threads",
+      section_name == "stale" and HL.note_separator or HL.threads_header
+    )
+
+    for _, section in ipairs(sections) do
+      local max_badge_width = 0
+      for _, row in ipairs(section.rows) do
+        max_badge_width = math.max(max_badge_width, #string.format("[%d]", row.count))
+      end
+
+      table.insert(lines, thread_group_indent .. section.label)
+      table.insert(threads_line_map, { type = "header", section = section_name })
+      table.insert(highlights, {
+        line = #lines - 1,
+        hl = section.label == "local/" and HL.local_group or HL.vendor_group,
+        col_start = 3,
+        col_end = -1,
+      })
+
+      for _, row in ipairs(section.rows) do
+        local fname = row.path:match("([^/]+)$") or row.path
+        local badge = string.format("[%d]", row.count)
+        local commit_suffix = ""
+        if row.commit_short_sha and state.scope_mode() == "all" then
+          commit_suffix = " @" .. row.commit_short_sha
+        end
+        local name_budget = math.max(row_budget - max_badge_width - #thread_row_indent - #commit_suffix - 1, 8)
+        local short_name = truncate_middle_text(fname, name_budget)
+        local gap = math.max(1, name_budget - vim.fn.strdisplaywidth(short_name) + 1)
+        local thread_line =
+          string.format("%s%s%s%s%s", thread_row_indent, short_name, string.rep(" ", gap), badge, commit_suffix)
+        table.insert(lines, thread_line)
+        table.insert(threads_line_map, {
+          type = row_type,
+          file_path = row.path,
+          line = row.note and row.note.line or nil,
+          side = row.note and row.note.side or "new",
+          source = row.note and row.note.status or row.source,
+          note_id = row.note and row.note.id or nil,
+          section = section_name,
+        })
+        local li = #lines - 1
+        local source_hl = (row.note and row.note.status == "remote") and HL.note_remote or HL.note_sign
+        local name_start = thread_line:find(short_name, 1, true)
+        if name_start then
+          table.insert(highlights, {
+            line = li,
+            hl = HL.explorer_file,
+            col_start = name_start - 1,
+            col_end = name_start - 1 + #short_name,
+          })
+        end
+        local badge_start = thread_line:find("[", 1, true)
+        if badge_start then
+          table.insert(highlights, {
+            line = li,
+            hl = source_hl,
+            col_start = badge_start - 1,
+            col_end = -1,
+          })
+        end
+      end
+    end
+  end
+
+  add_thread_sections("threads", build_thread_sections(active_files), "thread")
+  add_thread_sections("stale", build_stale_sections(), "stale")
+
+  if #lines == 0 then
+    table.insert(lines, " Threads")
+    table.insert(threads_line_map, { type = "header", section = "threads" })
+    table.insert(highlights, { line = 0, hl = HL.threads_header, col_start = 1, col_end = -1 })
+    table.insert(lines, "  (no threads)")
+    table.insert(threads_line_map, { type = "separator", section = "threads" })
+  end
+
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  local ns = vim.api.nvim_create_namespace("review_threads")
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, h in ipairs(highlights) do
     vim.api.nvim_buf_add_highlight(buf, ns, h.hl, h.line, h.col_start, h.col_end)
@@ -2316,26 +2413,34 @@ function M.select_file(idx)
   M.refresh()
 end
 
----@return table|nil
-local function explorer_entry_under_cursor()
-  if not explorer_line_map then
+---@param buf number
+---@return table[]|nil
+local function line_map_for_buffer(buf)
+  local ui_state = state.get_ui()
+  if not ui_state then
     return nil
   end
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  return explorer_line_map[cursor[1]]
+  if buf == ui_state.files_buf or buf == ui_state.explorer_buf then
+    return files_line_map
+  end
+  if buf == ui_state.threads_buf then
+    return threads_line_map
+  end
+  return nil
 end
 
---- Set up keymaps for the explorer buffer.
+--- Set up keymaps for a navigation buffer.
 ---@param buf number
-local function setup_explorer_keymaps(buf)
+local function setup_nav_keymaps(buf)
   local opts = { buffer = buf, noremap = true, silent = true }
 
   vim.keymap.set("n", "<CR>", function()
-    if not explorer_line_map then
+    local line_map = line_map_for_buffer(buf)
+    if not line_map then
       return
     end
     local cursor = vim.api.nvim_win_get_cursor(0)
-    local entry = explorer_line_map[cursor[1]]
+    local entry = line_map[cursor[1]]
     if not entry then
       return
     end
@@ -2627,10 +2732,11 @@ function M.open()
   pcall(vim.cmd, "file " .. vim.fn.fnameescape(tab_name))
   local tab = vim.api.nvim_get_current_tabpage()
 
-  local explorer_buf = create_buf("review://explorer", { filetype = "review-explorer" })
+  local files_buf = create_buf("review://files", { filetype = "review-explorer" })
+  local threads_buf = create_buf("review://threads", { filetype = "review-explorer" })
   local diff_buf = create_buf("review://diff", { filetype = "review-diff" })
 
-  vim.api.nvim_set_current_buf(explorer_buf)
+  vim.api.nvim_set_current_buf(files_buf)
   vim.cmd("vsplit")
   local wins = vim.api.nvim_tabpage_list_wins(tab)
   table.sort(wins, function(a, b)
@@ -2639,51 +2745,80 @@ function M.open()
     return apos[2] < bpos[2]
   end)
 
-  local explorer_win = wins[1]
+  local files_win = wins[1]
   local diff_win = wins[2]
 
-  vim.api.nvim_win_set_buf(explorer_win, explorer_buf)
+  vim.api.nvim_win_set_buf(files_win, files_buf)
   vim.api.nvim_win_set_buf(diff_win, diff_buf)
-  vim.api.nvim_set_current_win(explorer_win)
+  vim.api.nvim_set_current_win(files_win)
+  vim.cmd("belowright split")
+
+  local wins = vim.api.nvim_tabpage_list_wins(tab)
+  table.sort(wins, function(a, b)
+    local apos = vim.api.nvim_win_get_position(a)
+    local bpos = vim.api.nvim_win_get_position(b)
+    if apos[2] == bpos[2] then
+      return apos[1] < bpos[1]
+    end
+    return apos[2] < bpos[2]
+  end)
+
+  local threads_win = wins[2]
+
+  vim.api.nvim_win_set_buf(threads_win, threads_buf)
+  vim.api.nvim_set_current_win(files_win)
   vim.cmd("vertical resize " .. tostring(navigator_width()))
 
-  for _, win in ipairs({ explorer_win, diff_win }) do
+  for _, win in ipairs({ files_win, threads_win, diff_win }) do
     vim.wo[win].number = false
     vim.wo[win].relativenumber = false
     vim.wo[win].wrap = false
     apply_review_window_style(win, "pane")
   end
-  vim.wo[explorer_win].signcolumn = "no"
+  vim.wo[files_win].signcolumn = "no"
+  vim.wo[threads_win].signcolumn = "no"
   vim.wo[diff_win].signcolumn = "yes"
-  vim.wo[explorer_win].winfixwidth = true
+  vim.wo[files_win].winfixwidth = true
+  vim.wo[threads_win].winfixwidth = true
   vim.wo[diff_win].cursorline = true
   vim.wo[diff_win].cursorlineopt = "line"
-  vim.wo[explorer_win].cursorline = true
-  vim.wo[explorer_win].cursorlineopt = "line"
+  vim.wo[files_win].cursorline = true
+  vim.wo[files_win].cursorlineopt = "line"
+  vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = files_win })
+  vim.wo[threads_win].cursorline = true
+  vim.wo[threads_win].cursorlineopt = "line"
+  vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = threads_win })
 
   state.set_ui({
-    explorer_buf = explorer_buf,
-    explorer_win = explorer_win,
+    files_buf = files_buf,
+    files_win = files_win,
+    threads_buf = threads_buf,
+    threads_win = threads_win,
+    explorer_buf = files_buf,
+    explorer_win = files_win,
     diff_buf = diff_buf,
     diff_win = diff_win,
     tab = tab,
-    explorer_width = vim.api.nvim_win_get_width(explorer_win),
+    explorer_width = vim.api.nvim_win_get_width(files_win),
     view_mode = config.view or "unified",
   })
 
-  setup_explorer_keymaps(explorer_buf)
+  setup_nav_keymaps(files_buf)
+  setup_nav_keymaps(threads_buf)
   setup_diff_keymaps(diff_buf)
-  attach_review_quit_guard(explorer_buf)
+  attach_review_quit_guard(files_buf)
+  attach_review_quit_guard(threads_buf)
   attach_review_quit_guard(diff_buf)
 
-  render_explorer(explorer_buf)
+  render_files_pane(files_buf)
+  render_threads_pane(threads_buf)
   render_diff(diff_buf)
   ensure_git_status_pane(state.get_ui())
   update_window_chrome()
 
   local selection_line = navigator_selection_line()
-  if selection_line and vim.api.nvim_win_is_valid(explorer_win) then
-    vim.api.nvim_win_set_cursor(explorer_win, { selection_line, 0 })
+  if selection_line and vim.api.nvim_win_is_valid(files_win) then
+    vim.api.nvim_win_set_cursor(files_win, { selection_line, 0 })
   end
   vim.api.nvim_set_current_win(diff_win)
 
@@ -2719,7 +2854,7 @@ function M.close()
     if ui and ui.tab then
       local tabs = vim.api.nvim_list_tabpages()
       if #tabs <= 1 then
-        for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.git_buf, ui.split_buf }) do
+        for _, buf in ipairs({ ui.files_buf, ui.threads_buf, ui.explorer_buf, ui.diff_buf, ui.git_buf, ui.split_buf }) do
           if buf and vim.api.nvim_buf_is_valid(buf) then
             vim.api.nvim_buf_delete(buf, { force = true })
           end
@@ -4179,7 +4314,7 @@ function M.open_help()
   add_item(km.help, "Open this help")
   add_item(km.notes_list, "Open notes list")
   add_item(km.focus_files, "Focus Files section")
-  add_item(km.focus_git, "Focus Fugitive status pane")
+  add_item(km.focus_git, "Focus git status pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
   add_item("<CR>", "Open file or thread")
@@ -4200,7 +4335,7 @@ function M.open_help()
   add_item(km.prev_note, "Previous note")
   add_item(km.toggle_split, "Toggle unified/split view")
   add_item(km.focus_files, "Focus Files section")
-  add_item(km.focus_git, "Focus Fugitive status pane")
+  add_item(km.focus_git, "Focus git status pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
   add_item(km.notes_list, "Open notes list")
@@ -4210,10 +4345,15 @@ function M.open_help()
 
   if worktree_git_enabled() then
     add_section("Git")
-    add_item(km.focus_git, "Jump to the embedded Fugitive status pane")
-    add_item("-", "Fugitive stage or unstage under cursor")
-    add_item("cc", "Fugitive create commit")
-    add_item("A", "Fugitive stage all changes")
+    add_item(km.focus_git, "Jump to the embedded git status pane")
+    if require("review.git").is_gitbutler_workspace() then
+      add_item(km.focus_files, "Jump back to the Files section")
+      add_item(km.focus_threads, "Jump to the Threads section")
+    else
+      add_item("-", "Fugitive stage or unstage under cursor")
+      add_item("cc", "Fugitive create commit")
+      add_item("A", "Fugitive stage all changes")
+    end
   end
 
   add_section("Notes List")
@@ -4245,12 +4385,16 @@ function M.refresh()
     return
   end
   ensure_git_status_pane(ui_state)
-  if vim.api.nvim_buf_is_valid(ui_state.explorer_buf) then
-    render_explorer(ui_state.explorer_buf)
+  if ui_state.files_buf and vim.api.nvim_buf_is_valid(ui_state.files_buf) then
+    render_files_pane(ui_state.files_buf)
     local selection_line = navigator_selection_line()
-    if selection_line and ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win) then
-      vim.api.nvim_win_set_cursor(ui_state.explorer_win, { selection_line, 0 })
+    local files_win = ui_state.files_win or ui_state.explorer_win
+    if selection_line and files_win and vim.api.nvim_win_is_valid(files_win) then
+      vim.api.nvim_win_set_cursor(files_win, { selection_line, 0 })
     end
+  end
+  if ui_state.threads_buf and vim.api.nvim_buf_is_valid(ui_state.threads_buf) then
+    render_threads_pane(ui_state.threads_buf)
   end
   if ui_state.view_mode == "split" and ui_state.split_buf then
     render_split(ui_state)
