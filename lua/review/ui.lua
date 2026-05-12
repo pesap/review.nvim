@@ -55,6 +55,40 @@ local HL = {
   local_group = "ReviewLocalGroup",
 }
 
+---@param opts table|nil
+---@param success_msg string
+local function copy_review_export(opts, success_msg)
+  local review = package.loaded["review"] or require("review")
+  if type(review.export_content) ~= "function" then
+    package.loaded["review"] = nil
+    review = require("review")
+  end
+
+  if type(review.export_content) ~= "function" then
+    vim.notify("Could not load review.nvim clipboard exporter", vim.log.levels.ERROR)
+    return
+  end
+
+  local content, err = review.export_content(opts or {})
+  if not content then
+    vim.notify(err, err == "No active review session" and vim.log.levels.ERROR or vim.log.levels.INFO)
+    return
+  end
+
+  vim.fn.setreg('"', content)
+  local copied = {}
+  local ok_plus = pcall(vim.fn.setreg, "+", content)
+  if ok_plus then
+    table.insert(copied, "+")
+  end
+  local ok_star = pcall(vim.fn.setreg, "*", content)
+  if ok_star then
+    table.insert(copied, "*")
+  end
+  local target = #copied == 0 and [["]] or table.concat(copied, ", ")
+  vim.notify(success_msg .. target, vim.log.levels.INFO)
+end
+
 --- Set up highlight groups (called once).
 ---@param colorblind boolean
 function M.setup_highlights(colorblind)
@@ -3428,11 +3462,11 @@ function M.open_notes_list()
   end, buf_opts)
 
   vim.keymap.set("n", "y", function()
-    require("review").copy_notes_to_clipboard()
+    copy_review_export({ clipboard = true }, "Notes copied to clipboard register(s): ")
   end, buf_opts)
 
   vim.keymap.set("n", "Y", function()
-    require("review").copy_local_notes_to_clipboard()
+    copy_review_export({ local_only = true }, "Local notes copied to clipboard register(s): ")
   end, buf_opts)
 
   vim.keymap.set("n", "C", function()
