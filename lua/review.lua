@@ -691,8 +691,7 @@ function M.resolve_note_target(args)
           file_path = args[1],
           line = line,
           side = args[3] == "old" and "old" or "new",
-        },
-          nil
+        }, nil
       end
     end
 
