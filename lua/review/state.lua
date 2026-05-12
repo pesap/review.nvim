@@ -17,6 +17,46 @@ local function get_storage()
   return storage
 end
 
+---@param file_path string
+---@param line number
+---@param side string
+---@return string
+local function note_location_key(file_path, line, side)
+  return table.concat({ file_path, tostring(line), side }, "::")
+end
+
+local function rebuild_note_indexes()
+  if not session then
+    return
+  end
+
+  session.note_index_by_file = {}
+  session.note_index_by_id = {}
+  session.note_index_by_location = {}
+
+  for idx, note in ipairs(session.notes) do
+    if note.id then
+      session.note_index_by_id[note.id] = { note = note, idx = idx }
+    end
+
+    if note.file_path then
+      local by_file = session.note_index_by_file[note.file_path]
+      if not by_file then
+        by_file = {}
+        session.note_index_by_file[note.file_path] = by_file
+      end
+      table.insert(by_file, note)
+
+      if note.line and note.side then
+        local key = note_location_key(note.file_path, note.line, note.side)
+        if not session.note_index_by_location[key] then
+          session.note_index_by_location[key] = { note = note, idx = idx }
+        end
+      end
+    end
+  end
+end
+
 ---@class ReviewCommit
 ---@field sha string
 ---@field short_sha string
@@ -35,6 +75,7 @@ end
 ---@field provider ReviewProvider|nil
 ---@field notes ReviewNote[]
 ---@field draft_comments ReviewComment[]
+---@field comments_loading boolean|nil
 ---@field ui_state ReviewUIState|nil
 
 ---@class ReviewPR
@@ -106,6 +147,7 @@ end
 ---@field split_buf number|nil
 ---@field split_win number|nil
 ---@field tab number|nil
+---@field explorer_width number|nil
 ---@field view_mode string  "unified"|"split"
 
 --- Create a new review session.
@@ -125,6 +167,7 @@ function M.create(mode, base_ref, files)
     provider = nil,
     notes = {},
     draft_comments = {},
+    comments_loading = false,
     forge_info = nil,
     ui_state = nil,
   }
@@ -139,6 +182,8 @@ function M.create(mode, base_ref, files)
       end
     end
   end
+
+  rebuild_note_indexes()
 
   return session
 end
@@ -172,6 +217,18 @@ function M.get_forge_info()
     return session.forge_info
   end
   return nil
+end
+
+---@param loading boolean
+function M.set_comments_loading(loading)
+  if session then
+    session.comments_loading = loading and true or false
+  end
+end
+
+---@return boolean
+function M.comments_loading()
+  return session and session.comments_loading == true or false
 end
 
 --- Set the current file index.
@@ -271,6 +328,7 @@ function M.add_note(file_path, line, body, end_line, side, note_type)
   }
   next_note_id = next_note_id + 1
   table.insert(session.notes, note)
+  rebuild_note_indexes()
   get_storage().save(session)
 end
 
@@ -284,13 +342,7 @@ function M.get_notes(file_path)
   if not file_path then
     return session.notes
   end
-  local result = {}
-  for _, note in ipairs(session.notes) do
-    if note.file_path == file_path then
-      table.insert(result, note)
-    end
-  end
-  return result
+  return session.note_index_by_file[file_path] or {}
 end
 
 --- Remove a note by index in the session notes list.
@@ -298,6 +350,7 @@ end
 function M.remove_note(idx)
   if session and idx >= 1 and idx <= #session.notes then
     table.remove(session.notes, idx)
+    rebuild_note_indexes()
     get_storage().save(session)
   end
 end
@@ -319,6 +372,45 @@ function M.clear_drafts()
   end
   if count > 0 then
     session.notes = remaining
+    rebuild_note_indexes()
+    get_storage().save(session)
+  end
+  return count
+end
+
+--- Count local notes (draft or staged), excluding remote comments.
+---@return number
+function M.local_note_count()
+  if not session then
+    return 0
+  end
+  local count = 0
+  for _, note in ipairs(session.notes) do
+    if note.status ~= "remote" then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+--- Clear all local notes, keeping remote comments.
+---@return number count  Number of local notes removed
+function M.clear_local_notes()
+  if not session then
+    return 0
+  end
+  local remaining = {}
+  local count = 0
+  for _, note in ipairs(session.notes) do
+    if note.status == "remote" then
+      table.insert(remaining, note)
+    else
+      count = count + 1
+    end
+  end
+  if count > 0 then
+    session.notes = remaining
+    rebuild_note_indexes()
     get_storage().save(session)
   end
   return count
@@ -336,6 +428,7 @@ function M.clear_remote_comments()
     end
   end
   session.notes = remaining
+  rebuild_note_indexes()
 end
 
 --- Load remote comments (from forge) into the session.
@@ -368,6 +461,7 @@ function M.load_remote_comments(comments)
     })
     next_note_id = next_note_id + 1
   end
+  rebuild_note_indexes()
 end
 
 --- Toggle a note between draft and staged by its ID.
@@ -383,6 +477,7 @@ function M.toggle_staged(note_id)
       elseif note.status == "staged" then
         note.status = "draft"
       end
+      rebuild_note_indexes()
       get_storage().save(session)
       return
     end
@@ -410,6 +505,7 @@ function M.publish_staged(url_map)
   end
   if count > 0 then
     session.notes = remaining
+    rebuild_note_indexes()
     get_storage().save(session)
   end
   return count
@@ -422,12 +518,8 @@ function M.get_note_by_id(note_id)
   if not session then
     return nil, nil
   end
-  for i, note in ipairs(session.notes) do
-    if note.id == note_id then
-      return note, i
-    end
-  end
-  return nil, nil
+  local entry = session.note_index_by_id[note_id]
+  return entry and entry.note or nil, entry and entry.idx or nil
 end
 
 --- Find a note by file path, line, and side.
@@ -439,12 +531,8 @@ function M.find_note_at(file_path, line, side)
   if not session then
     return nil, nil
   end
-  for i, note in ipairs(session.notes) do
-    if note.file_path == file_path and note.line == line and note.side == side then
-      return note, i
-    end
-  end
-  return nil, nil
+  local entry = session.note_index_by_location[note_location_key(file_path, line, side)]
+  return entry and entry.note or nil, entry and entry.idx or nil
 end
 
 --- Update a note's body by index and persist.
@@ -455,6 +543,7 @@ function M.update_note_body(idx, body)
     return
   end
   session.notes[idx].body = body
+  rebuild_note_indexes()
   get_storage().save(session)
 end
 

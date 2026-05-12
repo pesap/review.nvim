@@ -107,7 +107,7 @@ function M.parse(diff_text)
           new_lnum = nil,
         })
         old_lnum = old_lnum + 1
-      elseif prefix == " " or prefix == "" then
+      elseif prefix == " " then
         -- Context line
         table.insert(current_hunk.lines, {
           type = "ctx",
@@ -149,10 +149,6 @@ function M.build_line_map(hunks)
   local display_line = 0
 
   for _, hunk in ipairs(hunks) do
-    -- Hunk header takes a display line
-    display_line = display_line + 1
-    -- Don't map the header line to source
-
     for _, line in ipairs(hunk.lines) do
       display_line = display_line + 1
       if line.new_lnum then
@@ -173,10 +169,16 @@ end
 --- Returns highlight ranges for the changed portions.
 ---@param old_str string
 ---@param new_str string
+---@param opts table|nil
 ---@return table[] old_ranges  Each: {col_start, col_end} (0-indexed, exclusive end)
 ---@return table[] new_ranges  Each: {col_start, col_end}
-function M.word_diff(old_str, new_str)
+function M.word_diff(old_str, new_str, opts)
   if not old_str or not new_str then
+    return {}, {}
+  end
+
+  opts = opts or {}
+  if opts.max_line_length and (#old_str > opts.max_line_length or #new_str > opts.max_line_length) then
     return {}, {}
   end
 

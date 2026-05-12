@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>review.nvim tree/history mock</title>
+    <style>
+      :root {
+        --bg: #090d12;
+        --panel: #0f141b;
+        --panel-2: #131a23;
+        --panel-3: #19222d;
+        --line: #23303f;
+        --line-soft: #1a2430;
+        --text: #d9e2ec;
+        --muted: #7f90a3;
+        --dim: #647489;
+        --accent: #f3c66f;
+        --blue: #77bdd8;
+        --green: #75d8a5;
+        --red: #ef8f82;
+        --orange: #e6ac65;
+        --shadow: 0 26px 90px rgba(0, 0, 0, 0.4);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top right, rgba(119, 189, 216, 0.08), transparent 24%),
+          radial-gradient(circle at bottom left, rgba(243, 198, 111, 0.08), transparent 26%),
+          linear-gradient(180deg, #070a0f 0%, #0a0e14 100%);
+        color: var(--text);
+        font-family: "Iosevka", "JetBrains Mono", "SF Mono", "IBM Plex Mono", monospace;
+      }
+
+      .app {
+        width: min(1400px, calc(100vw - 28px));
+        min-height: min(860px, calc(100vh - 28px));
+        display: grid;
+        grid-template-rows: 48px 1fr 32px;
+        background: rgba(8, 11, 16, 0.96);
+        border: 1px solid rgba(77, 94, 117, 0.28);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+
+      .topbar,
+      .statusbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 14px;
+        background: linear-gradient(180deg, rgba(16, 21, 28, 0.98), rgba(11, 15, 20, 0.98));
+      }
+
+      .topbar {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .statusbar {
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 12px;
+      }
+
+      .topbar-left,
+      .topbar-right {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        font-size: 12px;
+      }
+
+      .brand {
+        color: var(--accent);
+      }
+
+      .body {
+        display: grid;
+        grid-template-columns: 430px 1fr;
+        min-height: 0;
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        border-right: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(13, 18, 24, 0.98), rgba(10, 14, 19, 0.98));
+      }
+
+      .sidebar-head {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .sidebar-title {
+        margin: 0;
+        font-size: 19px;
+        color: #f2f5f8;
+      }
+
+      .sidebar-subtitle {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .sidebar-grid {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 150px 1fr;
+      }
+
+      .history {
+        border-right: 1px solid var(--line-soft);
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .tree {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .section-title {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 10px 12px 8px;
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        background: rgba(12, 17, 23, 0.98);
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .commit {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      .commit.active {
+        background: linear-gradient(180deg, rgba(24, 33, 44, 0.98), rgba(18, 26, 35, 0.98));
+        box-shadow: inset 2px 0 0 var(--accent);
+      }
+
+      .commit-sha {
+        color: var(--accent);
+        font-size: 12px;
+      }
+
+      .commit-msg {
+        margin-top: 6px;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .commit-meta {
+        margin-top: 6px;
+        color: var(--dim);
+        font-size: 11px;
+      }
+
+      .tree-tools {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line-soft);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        padding: 6px 8px;
+        border: 1px solid rgba(77, 94, 117, 0.24);
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.02);
+        font-size: 11px;
+      }
+
+      .chip.active {
+        color: var(--blue);
+        border-color: rgba(119, 189, 216, 0.25);
+        background: rgba(119, 189, 216, 0.08);
+      }
+
+      .tree-list {
+        padding: 8px 0;
+      }
+
+      .node {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 12px;
+        border-left: 2px solid transparent;
+      }
+
+      .node.folder {
+        color: #dbe5ef;
+      }
+
+      .node.file {
+        color: var(--text);
+      }
+
+      .node.selected {
+        background: linear-gradient(180deg, rgba(24, 33, 44, 0.95), rgba(18, 26, 35, 0.98));
+        border-left-color: var(--accent);
+      }
+
+      .node-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .indent-1 { padding-left: 24px; }
+      .indent-2 { padding-left: 40px; }
+      .indent-3 { padding-left: 56px; }
+
+      .caret,
+      .icon {
+        color: var(--dim);
+        width: 12px;
+        text-align: center;
+        flex: 0 0 auto;
+      }
+
+      .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+      }
+
+      .node-meta {
+        display: flex;
+        gap: 10px;
+        font-size: 11px;
+        color: var(--dim);
+        flex: 0 0 auto;
+      }
+
+      .add { color: var(--green); }
+      .del { color: var(--red); }
+      .focus { color: var(--accent); }
+      .thread { color: var(--blue); }
+
+      .main {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 58px 1fr;
+        background: linear-gradient(180deg, rgba(12, 17, 23, 0.98), rgba(9, 13, 18, 1));
+      }
+
+      .filebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .filebar-title {
+        font-size: 15px;
+        color: #eef2f7;
+      }
+
+      .filebar-subtitle {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .filebar-tools {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .tool {
+        padding: 5px 8px;
+        border: 1px solid rgba(77, 94, 117, 0.22);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .diff {
+        overflow: auto;
+        padding: 14px 16px 18px;
+      }
+
+      .hunk {
+        border: 1px solid rgba(77, 94, 117, 0.18);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .hunk-head {
+        padding: 10px 14px;
+        color: var(--muted);
+        border-bottom: 1px solid rgba(77, 94, 117, 0.14);
+        background: rgba(255, 255, 255, 0.025);
+        font-size: 12px;
+      }
+
+      .line {
+        display: grid;
+        grid-template-columns: 56px 56px 20px 1fr;
+        font-size: 13px;
+      }
+
+      .line > span {
+        padding: 7px 10px;
+      }
+
+      .num,
+      .sign {
+        color: var(--dim);
+        border-right: 1px solid rgba(77, 94, 117, 0.12);
+      }
+
+      .code {
+        white-space: pre;
+      }
+
+      .ctx .code { color: #a7b4c2; }
+      .plus { background: rgba(117, 216, 165, 0.08); }
+      .minus { background: rgba(239, 143, 130, 0.08); }
+      .plus .sign { color: var(--green); }
+      .minus .sign { color: var(--red); }
+
+      @media (max-width: 1080px) {
+        .body {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="brand">review.nvim</span>
+          <span>PR #6</span>
+          <span>branch/auth-hardening → main</span>
+        </div>
+        <div class="topbar-right">
+          <span>11 files</span>
+          <span>+243 / -41</span>
+          <span>2 open threads</span>
+          <span>46% reviewed</span>
+        </div>
+      </header>
+
+      <section class="body">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <div class="sidebar-title">History + Tree</div>
+            <div class="sidebar-subtitle">Left side behaves like a navigator, not a dashboard.</div>
+          </div>
+
+          <div class="sidebar-grid">
+            <section class="history">
+              <div class="section-title">History</div>
+
+              <article class="commit active">
+                <div class="commit-sha">8bd1e1c</div>
+                <div class="commit-msg">Add auth validation and token checks</div>
+                <div class="commit-meta">HEAD · you · 8m ago</div>
+              </article>
+
+              <article class="commit">
+                <div class="commit-sha">ae04c83</div>
+                <div class="commit-msg">Refactor billing branch handling</div>
+                <div class="commit-meta">you · 16m ago</div>
+              </article>
+
+              <article class="commit">
+                <div class="commit-sha">22f89ac</div>
+                <div class="commit-msg">Prompt cleanup for agent pipeline</div>
+                <div class="commit-meta">you · 29m ago</div>
+              </article>
+            </section>
+
+            <section class="tree">
+              <div class="section-title">Files</div>
+
+              <div class="tree-tools">
+                <span class="chip active">tree</span>
+                <span class="chip">hotspots</span>
+                <span class="chip">unreviewed</span>
+                <span class="chip">threads</span>
+              </div>
+
+              <div class="tree-list">
+                <div class="node folder">
+                  <div class="node-left">
+                    <span class="caret">▾</span>
+                    <span class="name">lua</span>
+                  </div>
+                  <div class="node-meta">
+                    <span>7 files</span>
+                  </div>
+                </div>
+
+                <div class="node folder indent-1">
+                  <div class="node-left">
+                    <span class="caret">▾</span>
+                    <span class="name">security</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="focus">focus</span>
+                  </div>
+                </div>
+
+                <div class="node file indent-2 selected">
+                  <div class="node-left">
+                    <span class="icon">•</span>
+                    <span class="name">auth.lua</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="add">+84</span>
+                    <span class="del">-3</span>
+                    <span class="focus">new</span>
+                  </div>
+                </div>
+
+                <div class="node folder indent-1">
+                  <div class="node-left">
+                    <span class="caret">▾</span>
+                    <span class="name">payments</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="thread">1 thread</span>
+                  </div>
+                </div>
+
+                <div class="node file indent-2">
+                  <div class="node-left">
+                    <span class="icon">•</span>
+                    <span class="name">billing.lua</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="add">+61</span>
+                    <span class="del">-18</span>
+                    <span class="thread">open</span>
+                  </div>
+                </div>
+
+                <div class="node folder indent-1">
+                  <div class="node-left">
+                    <span class="caret">▾</span>
+                    <span class="name">ai</span>
+                  </div>
+                  <div class="node-meta">
+                    <span>2 files</span>
+                  </div>
+                </div>
+
+                <div class="node file indent-2">
+                  <div class="node-left">
+                    <span class="icon">•</span>
+                    <span class="name">prompts.lua</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="add">+47</span>
+                    <span class="del">-2</span>
+                    <span>untouched</span>
+                  </div>
+                </div>
+
+                <div class="node file indent-2">
+                  <div class="node-left">
+                    <span class="icon">•</span>
+                    <span class="name">summaries.lua</span>
+                  </div>
+                  <div class="node-meta">
+                    <span class="add">+9</span>
+                    <span class="del">-1</span>
+                    <span>1 note</span>
+                  </div>
+                </div>
+
+                <div class="node folder">
+                  <div class="node-left">
+                    <span class="caret">▸</span>
+                    <span class="name">tests</span>
+                  </div>
+                  <div class="node-meta">
+                    <span>3 files</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </aside>
+
+        <section class="main">
+          <header class="filebar">
+            <div>
+              <div class="filebar-title">lua/security/auth.lua</div>
+              <div class="filebar-subtitle">commit 8bd1e1c · new file · focus: new file, large addition, not reviewed yet</div>
+            </div>
+            <div class="filebar-tools">
+              <span class="tool">a note</span>
+              <span class="tool">s split</span>
+              <span class="tool">N notes</span>
+              <span class="tool">]f next</span>
+            </div>
+          </header>
+
+          <div class="diff">
+            <div class="hunk">
+              <div class="hunk-head">@@ -0,84 +0,84 · validate_token</div>
+
+              <div class="line ctx">
+                <span class="num"></span>
+                <span class="num">1</span>
+                <span class="sign">+</span>
+                <span class="code">local M = {}</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">18</span>
+                <span class="sign">+</span>
+                <span class="code">if token == nil or #token &lt; 16 then</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">19</span>
+                <span class="sign">+</span>
+                <span class="code">  return false, "token too short"</span>
+              </div>
+
+              <div class="line ctx">
+                <span class="num"></span>
+                <span class="num">20</span>
+                <span class="sign"> </span>
+                <span class="code">end</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">36</span>
+                <span class="sign">+</span>
+                <span class="code">local ok, claims = jwt.decode(token, { verify = false })</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">67</span>
+                <span class="sign">+</span>
+                <span class="code">if claims.exp and claims.exp &lt; os.time() then</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <footer class="statusbar">
+        <span>q close · ? help · ]c/[c hunks · ]n/[n notes</span>
+        <span>Direction inspired by Gitu’s dense navigation and GitButler’s commit context</span>
+      </footer>
+    </main>
+  </body>
+</html>
