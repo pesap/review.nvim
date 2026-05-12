@@ -721,7 +721,13 @@ local function parse_note_target(raw)
     return nil
   end
 
-  local file_path, line, side = raw:match("^(.-):(%d+):?(old|new)?$")
+  local file_path, line, side = raw:match("^(.-):(%d+):(old)$")
+  if not file_path then
+    file_path, line, side = raw:match("^(.-):(%d+):(new)$")
+  end
+  if not file_path then
+    file_path, line = raw:match("^(.-):(%d+)$")
+  end
   if file_path and line then
     return {
       file_path = file_path,
@@ -751,7 +757,8 @@ function M.resolve_note_target(args)
           file_path = args[1],
           line = line,
           side = args[3] == "old" and "old" or "new",
-        }, nil
+        },
+          nil
       end
     end
 

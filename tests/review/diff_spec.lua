@@ -179,34 +179,30 @@ index 1234567..abcdefg 100644
     local files = diff.parse(input)
     local dn, do_, ntd, otd = diff.build_line_map(files[1].hunks)
 
-    -- Display line 1 = hunk header (no mapping)
-    assert.is_nil(dn[1])
-    assert.is_nil(do_[1])
+    -- Display line 1 = context "local M = {}" -> old:1, new:1
+    assert.are.equal(1, dn[1])
+    assert.are.equal(1, do_[1])
 
-    -- Display line 2 = context "local M = {}" -> old:1, new:1
-    assert.are.equal(1, dn[2])
-    assert.are.equal(1, do_[2])
+    -- Display line 2 = del "M.old = true" -> old:2, no new
+    assert.is_nil(dn[2])
+    assert.are.equal(2, do_[2])
 
-    -- Display line 3 = del "M.old = true" -> old:2, no new
-    assert.is_nil(dn[3])
-    assert.are.equal(2, do_[3])
+    -- Display line 3 = add "M.new = true" -> new:2, no old
+    assert.are.equal(2, dn[3])
+    assert.is_nil(do_[3])
 
-    -- Display line 4 = add "M.new = true" -> new:2, no old
-    assert.are.equal(2, dn[4])
-    assert.is_nil(do_[4])
+    -- Display line 4 = add "M.extra = true" -> new:3, no old
+    assert.are.equal(3, dn[4])
 
-    -- Display line 5 = add "M.extra = true" -> new:3, no old
-    assert.are.equal(3, dn[5])
-
-    -- Display line 6 = context "return M" -> old:3, new:4
-    assert.are.equal(4, dn[6])
-    assert.are.equal(3, do_[6])
+    -- Display line 5 = context "return M" -> old:3, new:4
+    assert.are.equal(4, dn[5])
+    assert.are.equal(3, do_[5])
 
     -- Reverse maps
-    assert.are.equal(2, ntd[1]) -- new line 1 -> display 2
-    assert.are.equal(4, ntd[2]) -- new line 2 -> display 4
-    assert.are.equal(2, otd[1]) -- old line 1 -> display 2
-    assert.are.equal(3, otd[2]) -- old line 2 -> display 3
+    assert.are.equal(1, ntd[1]) -- new line 1 -> display 1
+    assert.are.equal(3, ntd[2]) -- new line 2 -> display 3
+    assert.are.equal(1, otd[1]) -- old line 1 -> display 1
+    assert.are.equal(2, otd[2]) -- old line 2 -> display 2
   end)
 end)
 

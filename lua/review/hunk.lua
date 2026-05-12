@@ -40,7 +40,14 @@ end
 ---@return string|nil out, string|nil err
 local function run(cmd, input)
   local out = vim.fn.system(cmd, input)
-  if vim.v.shell_error ~= 0 then
+  local exit_code = vim.v.shell_error
+
+  if type(out) == "table" then
+    exit_code = out.code or exit_code
+    out = out.stdout or out.stderr or ""
+  end
+
+  if exit_code ~= 0 then
     return nil, trim_to_nil(out) or ("Command failed: " .. table.concat(cmd, " "))
   end
   return out, nil

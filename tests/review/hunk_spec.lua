@@ -87,15 +87,14 @@ describe("hunk integration", function()
     local calls = {}
 
     vim.fn.system = function(cmd, input)
-      vim.cmd("let v:shell_error = 0")
       table.insert(calls, {
         cmd = vim.deepcopy(cmd),
         input = input,
       })
       if cmd[3] == "get" then
-        return "{}"
+        return { code = 0, stdout = "{}" }
       end
-      return ""
+      return { code = 0, stdout = "" }
     end
 
     local ok, err = hunk.sync_comments({
@@ -175,8 +174,10 @@ describe("hunk integration", function()
         cmd = vim.deepcopy(cmd),
         input = input,
       })
-      vim.cmd("let v:shell_error = 1")
-      return "hunk: No active Hunk sessions are registered with the daemon."
+      return {
+        code = 1,
+        stdout = "hunk: No active Hunk sessions are registered with the daemon.",
+      }
     end
 
     local ok, err = hunk.sync_comments({

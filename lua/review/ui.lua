@@ -1023,7 +1023,8 @@ local function update_window_chrome()
   if ui_state.split_win and vim.api.nvim_win_is_valid(ui_state.split_win) then
     vim.wo[ui_state.split_win].winbar = ""
     if file then
-      vim.wo[ui_state.split_win].statusline = build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.split_win))
+      vim.wo[ui_state.split_win].statusline =
+        build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.split_win))
     else
       vim.wo[ui_state.split_win].statusline = ""
     end
@@ -1790,12 +1791,14 @@ function M.toggle_split()
     ui_state.view_mode = "split"
 
     local split_buf = create_buf("review://diff-new", { filetype = "review-diff" })
-    local left_width = ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win)
+    local left_width = ui_state.explorer_win
+        and vim.api.nvim_win_is_valid(ui_state.explorer_win)
         and vim.api.nvim_win_get_width(ui_state.explorer_win)
       or ui_state.explorer_width
       or navigator_width()
     ui_state.explorer_width = left_width
-    local diff_width = ui_state.diff_win and vim.api.nvim_win_is_valid(ui_state.diff_win)
+    local diff_width = ui_state.diff_win
+        and vim.api.nvim_win_is_valid(ui_state.diff_win)
         and vim.api.nvim_win_get_width(ui_state.diff_win)
       or nil
     local previous_equalalways = vim.o.equalalways
@@ -2714,15 +2717,17 @@ function M.open_thread_view(note)
   table.insert(lines, string.rep("\u{2500}", width - 2))
   highlight_rows[#lines] = { hl = HL.note_separator }
   local resolve_label = note.resolved and "x reopen" or "x resolve"
-  for _, legend_line in ipairs(build_footer_legend({
-    "e edit",
-    "d delete",
-    "r reply",
-    resolve_label,
-    "b browse",
-    "q close",
-    "? help",
-  }, width)) do
+  for _, legend_line in
+    ipairs(build_footer_legend({
+      "e edit",
+      "d delete",
+      "r reply",
+      resolve_label,
+      "b browse",
+      "q close",
+      "? help",
+    }, width))
+  do
     table.insert(lines, legend_line)
     highlight_rows[#lines] = { hl = HL.hunk_header }
   end
@@ -3229,18 +3234,20 @@ function M.open_notes_list()
   table.insert(lines, sep)
   highlight_rows[#lines] = { hl = HL.note_separator }
   note_refs[#lines] = false
-  for _, legend_line in ipairs(build_footer_legend({
-    "<CR> open",
-    "s stage",
-    "P publish",
-    "y clipboard",
-    "Y local",
-    "R refresh",
-    "C clear local",
-    "b url",
-    "q close",
-    "? help",
-  }, width)) do
+  for _, legend_line in
+    ipairs(build_footer_legend({
+      "<CR> open",
+      "s stage",
+      "P publish",
+      "y clipboard",
+      "Y local",
+      "R refresh",
+      "C clear local",
+      "b url",
+      "q close",
+      "? help",
+    }, width))
+  do
     table.insert(lines, legend_line)
     highlight_rows[#lines] = { hl = HL.hunk_header }
     note_refs[#lines] = false
@@ -3718,7 +3725,7 @@ function M.open_help()
   add_item(":ReviewToggle", "Toggle the review layout")
   add_item(":ReviewHelp", "Open this help")
   add_item(":ReviewNotes", "Open the notes list")
-  add_item(":ReviewClipboard", "Copy all notes and threads to the clipboard")
+  add_item(":ReviewClipboard", "Copy local notes, open threads, and discussion")
   add_item(":ReviewClipboardLocal", "Copy only local notes to the clipboard")
   add_item(":ReviewClearLocal", "Clear all local notes after confirmation")
   add_item(":ReviewRefresh", "Refresh remote PR/MR comments")
@@ -3760,7 +3767,7 @@ function M.open_help()
   add_item("<CR>", "Open note location or thread")
   add_item("s", "Toggle draft/staged")
   add_item("P", "Publish staged notes")
-  add_item("y", "Copy all notes to the clipboard")
+  add_item("y", "Copy local notes, open threads, and discussion")
   add_item("Y", "Copy only local notes to the clipboard")
   add_item("R", "Refresh remote comments")
   add_item("C", "Clear all local notes")
