@@ -15,6 +15,20 @@ local function sample_hunk(old_line, new_line)
   }
 end
 
+local function sample_git_file(path, status, section, old_line, new_line)
+  return {
+    path = path,
+    status = status,
+    git_status = status,
+    git_section = section,
+    git_status_entry = {
+      index_status = section == "staged" and status or " ",
+      worktree_status = section == "unstaged" and status or " ",
+    },
+    hunks = { sample_hunk(old_line, new_line) },
+  }
+end
+
 local function close_current_float()
   local win = vim.api.nvim_get_current_win()
   if win and vim.api.nvim_win_is_valid(win) then
@@ -23,6 +37,10 @@ local function close_current_float()
       pcall(vim.api.nvim_win_close, win, true)
     end
   end
+end
+
+local function send_keys(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
 end
 
 describe("review.ui explorer rail", function()
@@ -34,6 +52,8 @@ describe("review.ui explorer rail", function()
   local original_ui_module
   local original_git_module
   local original_branch
+  local original_status_sections
+  local original_open_fugitive_status
 
   before_each(function()
     original_storage_module = package.loaded["review.storage"]
@@ -59,8 +79,31 @@ describe("review.ui explorer rail", function()
     ui = require("review.ui")
     git = require("review.git")
     original_branch = git.current_branch
+    original_status_sections = git.status_sections
+    original_open_fugitive_status = git.open_fugitive_status
     git.current_branch = function()
       return "feature/rail-polish"
+    end
+    git.status_sections = function()
+      return {
+        staged = {},
+        unstaged = {},
+        untracked = {},
+      }
+    end
+    git.open_fugitive_status = function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_win_set_buf(0, buf)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "FugitiveStatus",
+        "",
+        " staged",
+        " unstaged",
+      })
+      return {
+        buf = buf,
+        win = vim.api.nvim_get_current_win(),
+      }, nil
     end
 
     review.setup({})
@@ -73,6 +116,8 @@ describe("review.ui explorer rail", function()
 
     if git then
       git.current_branch = original_branch
+      git.status_sections = original_status_sections
+      git.open_fugitive_status = original_open_fugitive_status
     end
 
     package.loaded["review.storage"] = original_storage_module
@@ -126,6 +171,112 @@ describe("review.ui explorer rail", function()
     assert.is_true(vim.tbl_contains(lines, "   local/"))
     assert.is_true(vim.tbl_contains(lines, "     long…lua [1]"))
     assert.is_true(vim.tbl_contains(lines, "     revi…lua [1]"))
+  end)
+
+  it("opens an embedded fugitive pane for worktree reviews", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local lines = vim.api.nvim_buf_get_lines(ui_state.git_buf, 0, -1, false)
+    local explorer_lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
+    local explorer_pos = vim.api.nvim_win_get_position(ui_state.explorer_win)
+    local git_pos = vim.api.nvim_win_get_position(ui_state.git_win)
+    local diff_pos = vim.api.nvim_win_get_position(ui_state.diff_win)
+
+    assert.is_true(vim.api.nvim_win_is_valid(ui_state.git_win))
+    assert.are.equal("FugitiveStatus", lines[1])
+    assert.is_false(vim.tbl_contains(explorer_lines, " Staged"))
+    assert.is_false(vim.tbl_contains(explorer_lines, " Unstaged"))
+    assert.are.equal(explorer_pos[2], git_pos[2])
+    assert.is_true(git_pos[1] > explorer_pos[1])
+    assert.is_true(diff_pos[2] > git_pos[2])
+  end)
+
+  it("focuses the fugitive pane from explorer and diff", function()
+    review.setup({
+      keymaps = {
+        focus_git = "g",
+      },
+    })
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    send_keys("g")
+    assert.are.equal(ui_state.git_win, vim.api.nvim_get_current_win())
+
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    send_keys("g")
+    assert.are.equal(ui_state.git_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("reuses the left-bottom pane when fugitive opens in another window", function()
+    git.open_fugitive_status = function()
+      vim.cmd("vsplit")
+      local win = vim.api.nvim_get_current_win()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_win_set_buf(win, buf)
+      vim.bo[buf].filetype = "fugitive"
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "FugitiveStatus" })
+      return {
+        buf = buf,
+        win = win,
+      }, nil
+    end
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local explorer_pos = vim.api.nvim_win_get_position(ui_state.explorer_win)
+    local git_pos = vim.api.nvim_win_get_position(ui_state.git_win)
+    local wins = vim.api.nvim_tabpage_list_wins(ui_state.tab)
+
+    assert.are.equal(explorer_pos[2], git_pos[2])
+    assert.is_true(git_pos[1] > explorer_pos[1])
+    assert.are.equal(3, #wins)
+  end)
+
+  it("skips the fugitive pane for explicit ref reviews", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      requested_ref = "main",
+    })
+
+    ui.open()
+
+    assert.is_nil(state.get_ui().git_win)
+    assert.is_nil(state.get_ui().git_buf)
+  end)
+
+  it("renders a themed fallback pane when fugitive is unavailable", function()
+    git.open_fugitive_status = function()
+      return nil, "vim-fugitive is not installed"
+    end
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().git_buf, 0, -1, false)
+
+    assert.is_true(vim.tbl_contains(lines, " review.nvim could not open vim-fugitive."))
+    assert.are.equal("no", vim.wo[state.get_ui().git_win].signcolumn)
   end)
 
   it("aligns thread badges within a section", function()
@@ -264,6 +415,14 @@ describe("review.ui explorer rail", function()
   end)
 
   it("shows untracked files only in all scope and exposes stale notes separately", function()
+    git.status_sections = function()
+      return {
+        staged = {},
+        unstaged = {},
+        untracked = { sample_git_file("lua/scratch.lua", "?", "untracked", 1, 1) },
+      }
+    end
+
     state.create("local", "main", {
       { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
     }, {
@@ -284,6 +443,13 @@ describe("review.ui explorer rail", function()
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     assert.is_true(vim.tbl_contains(lines, " Untracked"))
     assert.is_true(vim.tbl_contains(lines, "  ? scratch.lua") or vim.tbl_contains(lines, "  ? scrat….lua"))
+    local scratch_count = 0
+    for _, line in ipairs(lines) do
+      if line == "  ? scratch.lua" or line == "  ? scrat….lua" then
+        scratch_count = scratch_count + 1
+      end
+    end
+    assert.are.equal(1, scratch_count)
     assert.is_true(vim.tbl_contains(lines, " Stale"))
     assert.is_true(vim.tbl_contains(lines, "   local/"))
     assert.is_true(
@@ -334,6 +500,30 @@ describe("review.ui explorer rail", function()
     assert.is_true(vim.tbl_contains(lines, " Stale"))
     assert.is_true(vim.tbl_contains(lines, "   github/"))
     assert.is_true(vim.tbl_contains(lines, "     revi…lua [1]") or vim.tbl_contains(lines, "     review.lua [1]"))
+  end)
+
+  it("notifies when cycling stack with no commits in range", function()
+    local original_notify = vim.notify
+    local notified
+
+    vim.notify = function(msg, level)
+      notified = { msg = msg, level = level }
+    end
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+    vim.api.nvim_set_current_win(state.get_ui().explorer_win)
+    send_keys("T")
+
+    vim.notify = original_notify
+
+    assert.are.same({
+      msg = "No commits in the current review range",
+      level = vim.log.levels.INFO,
+    }, notified)
   end)
 
   it("reopens the session when the git branch changes under the active UI", function()
@@ -518,6 +708,9 @@ describe("review.ui help", function()
     assert.is_true(joined:match("Commands") ~= nil)
     assert.is_true(joined:match("Explorer") ~= nil)
     assert.is_true(joined:match("Diff") ~= nil)
+    assert.is_true(joined:match("Open file or thread") ~= nil)
+    assert.is_true(joined:match("Focus Fugitive status pane") ~= nil)
+    assert.is_true(joined:match("Toggle unified/split view") ~= nil)
     assert.is_nil(joined:match("AI Review Focus"))
     assert.is_nil(joined:match("review.nvim"))
   end)

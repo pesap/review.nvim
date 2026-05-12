@@ -1,14 +1,14 @@
 :Review	review.txt	/*:Review*
-:ReviewComment	review.txt	/*:ReviewComment*
-:ReviewClose	review.txt	/*:ReviewClose*
 :ReviewClearLocal	review.txt	/*:ReviewClearLocal*
 :ReviewClipboard	review.txt	/*:ReviewClipboard*
 :ReviewClipboardLocal	review.txt	/*:ReviewClipboardLocal*
+:ReviewClose	review.txt	/*:ReviewClose*
+:ReviewComment	review.txt	/*:ReviewComment*
 :ReviewExport	review.txt	/*:ReviewExport*
 :ReviewHelp	review.txt	/*:ReviewHelp*
 :ReviewNotes	review.txt	/*:ReviewNotes*
-:ReviewSuggestion	review.txt	/*:ReviewSuggestion*
 :ReviewSubmit	review.txt	/*:ReviewSubmit*
+:ReviewSuggestion	review.txt	/*:ReviewSuggestion*
 :ReviewToggle	review.txt	/*:ReviewToggle*
 Review	review.txt	/*Review*
 review-checkhealth	review.txt	/*review-checkhealth*

@@ -153,6 +153,8 @@ end
 ---@field explorer_win number|nil
 ---@field diff_buf number|nil
 ---@field diff_win number|nil
+---@field git_buf number|nil
+---@field git_win number|nil
 ---@field split_buf number|nil
 ---@field split_win number|nil
 ---@field tab number|nil
