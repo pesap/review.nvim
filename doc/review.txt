@@ -22,11 +22,15 @@ Features:
 - Dual-panel layout: file explorer + diff viewer
 - Unified and side-by-side split diff views
 - Word-level diff highlighting
-- Commit-level navigation with per-commit file filtering
+- Explicit review scopes: All, Current Commit, and Select Commit
+- Commit-level navigation with per-commit file and thread filtering
+- Untracked files in the explorer while reviewing the full branch
 - Inline notes on diff lines (normal and visual range selection)
 - Suggestion notes with GitHub-compatible `suggestion` blocks
 - Notes list panel with draft/staged/published workflow
 - Note persistence across sessions
+- Stale notes/threads surfaced separately when files disappear or review
+  context goes stale
 - Reference other notes with `#<id>` syntax
 - Export notes to markdown
 - Colorblind-friendly color scheme (enabled by default)
@@ -66,8 +70,8 @@ You can also set up a keymap to toggle the review panel: >lua
 
                         When diffing against a ref that has multiple commits
                         in the range, the commit list is shown in the
-                        explorer panel. Select a commit to filter files to
-                        that commit's changes.
+                        explorer panel. Select a commit to filter files and
+                        threads to that commit's changes.
 
                         To review a PR/MR: check out the review branch first
                         (`gh pr checkout <number>` for GitHub or
@@ -133,9 +137,10 @@ All keymaps are buffer-local to the review buffers and configurable via
 Explorer panel:~
 
     <CR>        Open the file or thread under the cursor. Thread entries
-                jump to the related diff location.
+                jump to the related diff location. Scope rows select
+                `all` or a specific commit.
     ?           Open review help.
-    T           Cycle between full stack view and per-commit filtering.
+    T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section.
     t           Focus the Threads section.
     q           Close the full review layout.
@@ -156,7 +161,7 @@ Diff viewer:~
     n / ]n      Jump to the next note (across files).
     [n          Jump to the previous note (across files).
     s           Toggle between unified and side-by-side split view.
-    T           Cycle between full stack view and per-commit filtering.
+    T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section in the explorer.
     t           Focus the Threads section in the explorer.
     q           Close the full review layout.
@@ -211,9 +216,21 @@ Each note is assigned an auto-incrementing ID visible in the notes list
                                                     *review-notes-explorer*
 Explorer threads~
 
-The explorer keeps `Files` and `Threads` separate. Remote threads and local
-notes are grouped under source labels such as `github/`, `gitlab/`, and
-`local/`, and selecting a thread entry jumps to the related diff location.
+The explorer keeps `Files` and `Threads` separate and shows the active
+`Scope` explicitly. In `all` scope, `Files` can include an `Untracked`
+subsection. Remote threads and local notes are grouped under source labels
+such as `github/`, `gitlab/`, and `local/`, and selecting a thread entry
+jumps to the related diff location.
+
+If notes or remote threads no longer match the active review context, they
+move to a separate `Stale` section instead of silently disappearing. This
+includes notes for deleted files, commit-scoped notes whose commit is no
+longer present, and remote threads from outdated or closed review context.
+
+Local notes created while scoped to a commit are stamped with that commit SHA
+and only reappear in matching commit scope. Remote GitHub/GitLab threads are
+filtered conservatively by active file membership rather than guessed commit
+attribution.
 
 ==============================================================================
 7. CONFIGURATION                                      *review-configuration*

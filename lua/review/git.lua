@@ -93,6 +93,69 @@ function M.commit_diff(sha)
   return out
 end
 
+---@return string[]
+function M.untracked_paths()
+  local out = vim.fn.systemlist({ "git", "ls-files", "--others", "--exclude-standard" })
+  if vim.v.shell_error ~= 0 then
+    return {}
+  end
+
+  local result = {}
+  for _, path in ipairs(out) do
+    if path and path ~= "" then
+      table.insert(result, path)
+    end
+  end
+  return result
+end
+
+---@param path string
+---@return ReviewFile
+local function build_untracked_file(path)
+  local root = M.root()
+  local abs_path = root and (root .. "/" .. path) or path
+  local ok, lines = pcall(vim.fn.readfile, abs_path)
+  if not ok or type(lines) ~= "table" then
+    lines = { "[unreadable file]" }
+  end
+
+  local hunk_lines = {}
+  for idx, text in ipairs(lines) do
+    table.insert(hunk_lines, {
+      type = "add",
+      text = text,
+      old_lnum = nil,
+      new_lnum = idx,
+    })
+  end
+
+  local line_count = #hunk_lines
+  return {
+    path = path,
+    status = "?",
+    untracked = true,
+    hunks = {
+      {
+        header = string.format("@@ -0,0 +1,%d @@", line_count),
+        old_start = 0,
+        old_count = 0,
+        new_start = 1,
+        new_count = line_count,
+        lines = hunk_lines,
+      },
+    },
+  }
+end
+
+---@return ReviewFile[]
+function M.untracked_files()
+  local result = {}
+  for _, path in ipairs(M.untracked_paths()) do
+    table.insert(result, build_untracked_file(path))
+  end
+  return result
+end
+
 --- List commits in a range.
 ---@param base_ref string  Base ref (e.g. "main", "HEAD~5")
 ---@param head_ref string|nil  Head ref (default: "HEAD")

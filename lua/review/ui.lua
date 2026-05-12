@@ -821,6 +821,46 @@ local function sorted_file_entries(files)
   return entries
 end
 
+---@return string
+local function active_scope_label()
+  local mode = state.scope_mode()
+  if mode == "all" then
+    return "all"
+  end
+
+  local commit = state.current_commit()
+  if not commit then
+    return mode == "select_commit" and "select" or "current"
+  end
+
+  local detail = string.format("%s %s", commit.short_sha, commit.message)
+  if mode == "select_commit" then
+    return "select · " .. detail
+  end
+  return "current · " .. detail
+end
+
+---@return table[]
+local function scope_picker_rows()
+  local s = state.get()
+  if not s or state.scope_mode() ~= "select_commit" then
+    return {}
+  end
+
+  local rows = {
+    { type = "scope_all", label = "all" },
+  }
+  for idx, commit in ipairs(s.commits) do
+    table.insert(rows, {
+      type = "commit",
+      idx = idx,
+      commit = commit,
+      label = string.format("%s  %s", commit.short_sha, commit.message),
+    })
+  end
+  return rows
+end
+
 ---@param note ReviewNote
 ---@param file ReviewFile
 ---@return boolean
@@ -854,7 +894,8 @@ local function build_thread_sections(active_files)
     }
   end
 
-  for _, note in ipairs(state.get_notes()) do
+  local scoped_notes = state.scoped_notes()
+  for _, note in ipairs(scoped_notes) do
     if not note.file_path then
       goto continue
     end
@@ -903,6 +944,7 @@ local function build_thread_sections(active_files)
         idx = entry.idx,
         count = entry.local_count,
         note = entry.first_local,
+        commit_short_sha = entry.first_local and entry.first_local.commit_short_sha or nil,
       })
     end
   end
@@ -929,6 +971,54 @@ local function build_thread_sections(active_files)
   return sections
 end
 
+---@return table[]
+local function build_stale_sections()
+  local _, stale_notes = state.scoped_notes()
+  if #stale_notes == 0 then
+    return {}
+  end
+
+  local info = state.get_forge_info()
+  local vendor_label = (info and info.forge or "vendor") .. "/"
+  local grouped = {}
+
+  for _, note in ipairs(stale_notes) do
+    local source = note.status == "remote" and vendor_label or "local/"
+    local path = note.file_path or "(discussion)"
+    local key = source .. "::" .. path
+    local entry = grouped[key]
+    if not entry then
+      entry = {
+        label = source,
+        path = path,
+        count = 0,
+        note = note,
+        commit_short_sha = note.commit_short_sha,
+      }
+      grouped[key] = entry
+    end
+    entry.count = entry.count + 1
+  end
+
+  local sections_by_label = {}
+  for _, entry in pairs(grouped) do
+    sections_by_label[entry.label] = sections_by_label[entry.label] or {}
+    table.insert(sections_by_label[entry.label], entry)
+  end
+
+  local sections = {}
+  for _, label in ipairs({ vendor_label, "local/" }) do
+    local rows = sections_by_label[label]
+    if rows and #rows > 0 then
+      table.sort(rows, function(a, b)
+        return a.path < b.path
+      end)
+      table.insert(sections, { label = label, rows = rows })
+    end
+  end
+  return sections
+end
+
 ---@param file_path string
 ---@param line number|nil
 ---@param side string|nil
@@ -938,10 +1028,6 @@ local function jump_to_file_location(file_path, line, side)
     return
   end
 
-  if sess.current_commit_idx then
-    state.set_commit(nil)
-  end
-
   local active = state.active_files()
   local file_idx, file
   for i, f in ipairs(active) do
@@ -949,6 +1035,17 @@ local function jump_to_file_location(file_path, line, side)
       file_idx = i
       file = f
       break
+    end
+  end
+  if (not file_idx or not file) and sess.current_commit_idx then
+    state.set_commit(nil)
+    active = state.active_files()
+    for i, f in ipairs(active) do
+      if f.path == file_path then
+        file_idx = i
+        file = f
+        break
+      end
     end
   end
   if not file_idx or not file then
@@ -1198,10 +1295,142 @@ local function render_explorer(buf)
   local branch_line, base_line = navigator_context_lines()
   local header_indent = " "
   local file_indent = "  "
+  local scope_indent = "  "
   local thread_group_indent = "   "
   local thread_row_indent = "     "
   local explorer_width = current_navigator_width()
   local row_budget = math.max(explorer_width - 7, 10)
+  local tracked_files = {}
+  local untracked_files = {}
+  for _, entry in ipairs(sorted_file_entries(active_files)) do
+    if entry.file.untracked or entry.file.status == "?" then
+      table.insert(untracked_files, entry)
+    else
+      table.insert(tracked_files, entry)
+    end
+  end
+
+  local function add_separator(section)
+    table.insert(lines, " " .. string.rep("─", math.max(8, explorer_width - 3)))
+    table.insert(explorer_line_map, { type = "separator", section = section })
+    table.insert(highlights, { line = #lines - 1, hl = HL.note_separator, col_start = 1, col_end = -1 })
+  end
+
+  local function add_section_header(section, label, hl)
+    table.insert(lines, header_indent .. label)
+    table.insert(explorer_line_map, { type = "header", section = section })
+    table.insert(highlights, { line = #lines - 1, hl = hl, col_start = 1, col_end = -1 })
+  end
+
+  local function add_file_rows(section, entries)
+    for _, entry in ipairs(entries) do
+      local file = entry.file
+      local is_active = (entry.idx == s.current_file_idx)
+      local basename = truncate_middle_text(entry.basename, math.max(row_budget - 4, 8))
+      local line = string.format("%s%s %s", file_indent, file.status, basename)
+
+      table.insert(lines, line)
+      table.insert(explorer_line_map, { type = "file", idx = entry.idx, section = section })
+      local li = #lines - 1
+      if is_active then
+        table.insert(highlights, {
+          line = li,
+          hl = HL.explorer_active_row,
+          col_start = 0,
+          col_end = -1,
+        })
+      end
+
+      local status_hl = HL.status_m
+      if file.status == "A" or file.status == "?" then
+        status_hl = HL.status_a
+      elseif file.status == "D" then
+        status_hl = HL.status_d
+      end
+      table.insert(highlights, { line = li, hl = status_hl, col_start = 2, col_end = 3 })
+
+      local basename_col = line:find(basename, 1, true)
+      if basename_col then
+        table.insert(highlights, {
+          line = li,
+          hl = is_active and HL.explorer_active or HL.explorer_file,
+          col_start = basename_col - 1,
+          col_end = basename_col - 1 + #basename,
+        })
+      end
+    end
+  end
+
+  local function add_thread_sections(section_name, sections, row_type)
+    if #sections == 0 then
+      return
+    end
+
+    if #lines > 0 then
+      add_separator(section_name)
+    end
+    add_section_header(section_name, section_name == "stale" and "Stale" or "Threads", section_name == "stale" and HL.note_separator or HL.threads_header)
+
+    for _, section in ipairs(sections) do
+      local max_badge_width = 0
+      for _, row in ipairs(section.rows) do
+        max_badge_width = math.max(max_badge_width, #string.format("[%d]", row.count))
+      end
+
+      table.insert(lines, thread_group_indent .. section.label)
+      table.insert(explorer_line_map, { type = "header", section = section_name })
+      table.insert(highlights, {
+        line = #lines - 1,
+        hl = section.label == "local/" and HL.local_group or HL.vendor_group,
+        col_start = 3,
+        col_end = -1,
+      })
+
+      for _, row in ipairs(section.rows) do
+        local fname = row.path:match("([^/]+)$") or row.path
+        local badge = string.format("[%d]", row.count)
+        local commit_suffix = ""
+        if row.commit_short_sha and state.scope_mode() == "all" then
+          commit_suffix = " @" .. row.commit_short_sha
+        end
+        local name_budget = math.max(row_budget - max_badge_width - #thread_row_indent - #commit_suffix - 1, 8)
+        local short_name = truncate_middle_text(fname, name_budget)
+        local gap = math.max(1, name_budget - vim.fn.strdisplaywidth(short_name) + 1)
+        local thread_line =
+          string.format("%s%s%s%s%s", thread_row_indent, short_name, string.rep(" ", gap), badge, commit_suffix)
+        table.insert(lines, thread_line)
+        table.insert(explorer_line_map, {
+          type = row_type,
+          file_path = row.path,
+          line = row.note and row.note.line or nil,
+          side = row.note and row.note.side or "new",
+          source = row.note and row.note.status or row.source,
+          note_id = row.note and row.note.id or nil,
+          section = section_name,
+        })
+        local li = #lines - 1
+        local source_hl = (row.note and row.note.status == "remote") and HL.note_remote or HL.note_sign
+        local name_start = thread_line:find(short_name, 1, true)
+        if name_start then
+          table.insert(highlights, {
+            line = li,
+            hl = HL.explorer_file,
+            col_start = name_start - 1,
+            col_end = name_start - 1 + #short_name,
+          })
+        end
+        local badge_start = thread_line:find("[", 1, true)
+        if badge_start then
+          table.insert(highlights, {
+            line = li,
+            hl = source_hl,
+            col_start = badge_start - 1,
+            col_end = -1,
+          })
+        end
+      end
+    end
+  end
 
   table.insert(lines, branch_line)
   table.insert(explorer_line_map, { type = "header", section = "context" })
@@ -1212,6 +1441,41 @@ local function render_explorer(buf)
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = 9 })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 9, col_end = -1 })
   end
+
+  local scope_line = string.format("%sScope  %s", header_indent, truncate_end_text(active_scope_label(), math.max(explorer_width - 9, 8)))
+  table.insert(lines, scope_line)
+  table.insert(explorer_line_map, { type = "header", section = "scope" })
+  table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 1, col_end = 6 })
+  table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 7, col_end = -1 })
+
+  for _, row in ipairs(scope_picker_rows()) do
+    local label = truncate_end_text(row.label, math.max(explorer_width - 4, 8))
+    local line = scope_indent .. label
+    table.insert(lines, line)
+    table.insert(explorer_line_map, {
+      type = row.type,
+      idx = row.idx,
+      section = "scope",
+    })
+    local li = #lines - 1
+    local is_active = (row.type == "scope_all" and state.scope_mode() == "all")
+      or (row.type == "commit" and s.current_commit_idx == row.idx)
+    if is_active then
+      table.insert(highlights, {
+        line = li,
+        hl = HL.explorer_active_row,
+        col_start = 0,
+        col_end = -1,
+      })
+    end
+    table.insert(highlights, {
+      line = li,
+      hl = is_active and HL.explorer_active or HL.commit,
+      col_start = 2,
+      col_end = -1,
+    })
+  end
+
   local files_header = string.format("%sFiles  +%d  -%d", header_indent, additions, deletions)
   table.insert(lines, files_header)
   table.insert(explorer_line_map, { type = "header", section = "files" })
@@ -1239,114 +1503,19 @@ local function render_explorer(buf)
     end
   end
 
-  for _, entry in ipairs(sorted_file_entries(active_files)) do
-    local file = entry.file
-    local is_active = (entry.idx == s.current_file_idx)
-    local tail = ""
-    local basename_budget = math.max(row_budget - #tail - 4, 8)
-    local basename = truncate_middle_text(entry.basename, basename_budget)
-    local line = string.format("%s%s %s%s", file_indent, file.status, basename, tail)
-
-    table.insert(lines, line)
-    table.insert(explorer_line_map, { type = "file", idx = entry.idx, section = "files" })
-    local li = #lines - 1
-    if is_active then
-      table.insert(highlights, {
-        line = li,
-        hl = HL.explorer_active_row,
-        col_start = 0,
-        col_end = -1,
-      })
-    end
-
-    local status_hl = HL.status_m
-    if file.status == "A" then
-      status_hl = HL.status_a
-    elseif file.status == "D" then
-      status_hl = HL.status_d
-    end
-    table.insert(highlights, { line = li, hl = status_hl, col_start = 2, col_end = 3 })
-
-    local basename_col = line:find(basename, 1, true)
-    if basename_col then
-      table.insert(highlights, {
-        line = li,
-        hl = is_active and HL.explorer_active or HL.explorer_file,
-        col_start = basename_col - 1,
-        col_end = basename_col - 1 + #basename,
-      })
-    end
-  end
-
-  local thread_sections = build_thread_sections(active_files)
-  if #thread_sections > 0 then
-    table.insert(lines, " " .. string.rep("─", math.max(8, explorer_width - 3)))
-    table.insert(explorer_line_map, { type = "separator", section = "threads" })
-    table.insert(highlights, { line = #lines - 1, hl = HL.note_separator, col_start = 1, col_end = -1 })
-    table.insert(lines, header_indent .. "Threads")
-    table.insert(explorer_line_map, { type = "header", section = "threads" })
-    table.insert(highlights, { line = #lines - 1, hl = HL.threads_header, col_start = 1, col_end = -1 })
-
-    for _, section in ipairs(thread_sections) do
-      local max_badge_width = 0
-      for _, row in ipairs(section.rows) do
-        max_badge_width = math.max(max_badge_width, #string.format("[%d]", row.count))
-      end
-
-      table.insert(lines, thread_group_indent .. section.label)
-      table.insert(explorer_line_map, { type = "header", section = "threads" })
-      table.insert(highlights, {
-        line = #lines - 1,
-        hl = section.label == "local/" and HL.local_group or HL.vendor_group,
-        col_start = 3,
-        col_end = -1,
-      })
-
-      for _, row in ipairs(section.rows) do
-        local fname = row.path:match("([^/]+)$") or row.path
-        local badge = string.format("[%d]", row.count)
-        local name_budget = math.max(row_budget - max_badge_width - #thread_row_indent - 1, 8)
-        local short_name = truncate_middle_text(fname, name_budget)
-        local gap = math.max(1, name_budget - vim.fn.strdisplaywidth(short_name) + 1)
-        local thread_line = string.format("%s%s%s%s", thread_row_indent, short_name, string.rep(" ", gap), badge)
-        table.insert(lines, thread_line)
-        table.insert(explorer_line_map, {
-          type = "thread",
-          idx = row.idx,
-          file_path = row.path,
-          line = row.note and row.note.line or nil,
-          side = row.note and row.note.side or "new",
-          source = row.source,
-          section = "threads",
-        })
-        local li = #lines - 1
-        local source_hl = row.source == "vendor" and HL.note_remote or HL.note_sign
-        local name_start = thread_line:find(short_name, 1, true)
-        if name_start then
-          table.insert(highlights, {
-            line = li,
-            hl = HL.explorer_file,
-            col_start = name_start - 1,
-            col_end = name_start - 1 + #short_name,
-          })
-        end
-        local badge_start = thread_line:find("[", 1, true)
-        if badge_start then
-          table.insert(highlights, {
-            line = li,
-            hl = source_hl,
-            col_start = badge_start - 1,
-            col_end = -1,
-          })
-        end
-      end
-    end
+  add_file_rows("files", tracked_files)
+  if state.scope_mode() == "all" and #untracked_files > 0 then
+    add_section_header("files", "Untracked", HL.panel_meta)
+    add_file_rows("files", untracked_files)
   end
 
   if #active_files == 0 then
     table.insert(lines, "  (no files)")
-    table.insert(explorer_line_map, { type = "separator" })
+    table.insert(explorer_line_map, { type = "separator", section = "files" })
   end
+
+  add_thread_sections("threads", build_thread_sections(active_files), "thread")
+  add_thread_sections("stale", build_stale_sections(), "stale")
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -1905,11 +2074,13 @@ end
 
 --- Select a commit (nil = all changes) and refresh the view.
 ---@param idx number|nil  Commit index, or nil for all changes
-function M.select_commit(idx)
+---@param opts table|nil
+function M.select_commit(idx, opts)
   local s = state.get()
   if not s then
     return
   end
+  opts = opts or {}
 
   -- If selecting a specific commit, lazily load its files
   if idx ~= nil then
@@ -1922,27 +2093,38 @@ function M.select_commit(idx)
   end
 
   state.set_commit(idx)
+  if idx == nil then
+    state.set_scope_mode("all")
+  elseif opts.scope_mode then
+    state.set_scope_mode(opts.scope_mode)
+  else
+    state.set_scope_mode("current_commit")
+  end
 
   M.refresh()
 end
 
---- Toggle between the full stack/range view and a single selected commit.
+--- Toggle between all, current-commit, and commit-picker scope modes.
 function M.toggle_stack_view()
   local s = state.get()
   if not s or #s.commits == 0 then
     return
   end
 
-  if s.current_commit_idx == nil then
-    M.select_commit(1)
+  local mode = state.scope_mode()
+  if mode == "all" then
+    M.select_commit(s.current_commit_idx or 1, { scope_mode = "current_commit" })
     return
   end
 
-  if s.current_commit_idx >= #s.commits then
-    M.select_commit(nil)
-  else
-    M.select_commit(s.current_commit_idx + 1)
+  if mode == "current_commit" then
+    state.set_scope_mode("select_commit")
+    M.refresh()
+    M.focus_section("scope")
+    return
   end
+
+  M.select_commit(nil)
 end
 
 --- Select a file in the explorer and render its diff.
@@ -1967,8 +2149,10 @@ local function setup_explorer_keymaps(buf)
       return
     end
 
-    if entry.type == "commit" then
-      M.select_commit(entry.idx)
+    if entry.type == "scope_all" then
+      M.select_commit(nil)
+    elseif entry.type == "commit" then
+      M.select_commit(entry.idx, { scope_mode = "current_commit" })
     elseif entry.type == "file" then
       M.select_file(entry.idx)
       local ui_state = state.get_ui()
@@ -1977,6 +2161,8 @@ local function setup_explorer_keymaps(buf)
       end
     elseif entry.type == "thread" then
       jump_to_file_location(entry.file_path, entry.line, entry.side)
+    elseif entry.type == "stale" then
+      M.open_notes_list()
     end
   end, opts)
 
@@ -3078,13 +3264,17 @@ end
 --- Open a floating window listing all notes across all files.
 --- Pressing <CR> on a note jumps to that file and line.
 function M.open_notes_list()
+  if not state.session_matches_git() then
+    require("review").reopen_session()
+    return
+  end
   local s = state.get()
   if not s then
     return
   end
 
-  local all_notes = state.get_notes()
-  if #all_notes == 0 then
+  local scoped_notes, stale_notes = state.scoped_notes()
+  if #scoped_notes == 0 and #stale_notes == 0 then
     vim.notify("No notes yet", vim.log.levels.INFO)
     return
   end
@@ -3140,7 +3330,7 @@ function M.open_notes_list()
   local open_notes = {}
   local resolved_notes = {}
   local discussion_notes = {}
-  for i, note in ipairs(all_notes) do
+  for i, note in ipairs(scoped_notes) do
     local entry = { idx = i, note = note }
     if note.is_general then
       table.insert(discussion_notes, entry)
@@ -3151,6 +3341,10 @@ function M.open_notes_list()
     elseif note.status == "remote" then
       table.insert(open_notes, entry)
     end
+  end
+  local stale_entries = {}
+  for i, note in ipairs(stale_notes) do
+    table.insert(stale_entries, { idx = i + #scoped_notes, note = note })
   end
 
   local function sort_by_file_order(list)
@@ -3185,6 +3379,7 @@ function M.open_notes_list()
   sort_by_recent(discussion_notes)
   sort_by_recent(open_notes)
   sort_by_recent(resolved_notes)
+  sort_by_file_order(stale_entries)
 
   local extra_hls = {}
   local dw = vim.fn.strdisplaywidth
@@ -3287,6 +3482,7 @@ function M.open_notes_list()
   render_section(open_notes, "Open Threads", HL.note_remote, true)
   render_section(discussion_notes, "Discussion", HL.note_author, true)
   render_section(resolved_notes, "Resolved", HL.note_remote_resolved, true)
+  render_section(stale_entries, "Stale", HL.note_separator, true)
 
   table.insert(lines, "")
   note_refs[#lines] = false
@@ -3424,7 +3620,7 @@ function M.open_notes_list()
 
   vim.keymap.set("n", "P", function()
     local staged_notes = {}
-    for _, note in ipairs(all_notes) do
+    for _, note in ipairs(state.get_notes()) do
       if note.status == "staged" then
         table.insert(staged_notes, note)
       end
@@ -3828,6 +4024,10 @@ end
 
 --- Refresh both panels (call after state changes).
 function M.refresh()
+  if not state.session_matches_git() then
+    require("review").reopen_session()
+    return
+  end
   clear_inline_preview()
   local ui_state = state.get_ui()
   if not ui_state then
