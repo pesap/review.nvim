@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>review.nvim diff-left history-tree-right</title>
+    <style>
+      :root {
+        --bg: #090d12;
+        --shell: #0b1016;
+        --panel: #10161e;
+        --panel-2: #141c26;
+        --panel-3: #19222d;
+        --line: #243142;
+        --line-soft: #1a2430;
+        --text: #d7e0ea;
+        --muted: #8291a6;
+        --dim: #66758a;
+        --accent: #f3c66f;
+        --blue: #77bdd8;
+        --green: #76d7a5;
+        --red: #ef8f82;
+        --orange: #e3ab64;
+        --purple: #b18fff;
+        --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top left, rgba(119, 189, 216, 0.08), transparent 24%),
+          radial-gradient(circle at bottom right, rgba(243, 198, 111, 0.08), transparent 26%),
+          linear-gradient(180deg, #070b10 0%, #0a0f15 100%);
+        color: var(--text);
+        font-family: "Iosevka", "JetBrains Mono", "SF Mono", "IBM Plex Mono", monospace;
+      }
+
+      .app {
+        width: min(1440px, calc(100vw - 28px));
+        min-height: min(880px, calc(100vh - 28px));
+        display: grid;
+        grid-template-rows: 48px 1fr 32px;
+        background: rgba(8, 11, 16, 0.96);
+        border: 1px solid rgba(79, 96, 120, 0.28);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+
+      .topbar,
+      .statusbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 14px;
+        background: linear-gradient(180deg, rgba(16, 21, 28, 0.98), rgba(11, 15, 20, 0.98));
+      }
+
+      .topbar {
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+      }
+
+      .statusbar {
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--dim);
+      }
+
+      .top-left,
+      .top-right,
+      .status-left,
+      .status-right {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .brand {
+        color: var(--accent);
+      }
+
+      .body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 420px;
+        min-height: 0;
+      }
+
+      .diff-pane {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 60px 1fr;
+        background: linear-gradient(180deg, rgba(10, 14, 19, 0.98), rgba(8, 11, 15, 1));
+        border-right: 1px solid var(--line);
+      }
+
+      .navigator {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        background: linear-gradient(180deg, rgba(14, 19, 26, 0.98), rgba(10, 14, 19, 0.98));
+      }
+
+      .filebar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .filebar-title {
+        font-size: 15px;
+        color: #eef2f7;
+      }
+
+      .filebar-subtitle {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .filebar-tools {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .tool {
+        padding: 5px 8px;
+        border: 1px solid rgba(79, 96, 120, 0.22);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .diff {
+        overflow: auto;
+        padding: 14px 16px 18px;
+      }
+
+      .hunk {
+        border: 1px solid rgba(79, 96, 120, 0.18);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .hunk-head {
+        padding: 10px 14px;
+        color: var(--muted);
+        border-bottom: 1px solid rgba(79, 96, 120, 0.14);
+        background: rgba(255, 255, 255, 0.025);
+        font-size: 12px;
+      }
+
+      .line {
+        display: grid;
+        grid-template-columns: 56px 56px 20px 1fr;
+        font-size: 13px;
+      }
+
+      .line > span {
+        padding: 7px 10px;
+      }
+
+      .num,
+      .sign {
+        color: var(--dim);
+        border-right: 1px solid rgba(79, 96, 120, 0.12);
+      }
+
+      .code {
+        white-space: pre;
+      }
+
+      .ctx .code { color: #a8b4c2; }
+      .plus { background: rgba(118, 215, 165, 0.08); }
+      .minus { background: rgba(239, 143, 130, 0.08); }
+      .plus .sign { color: var(--green); }
+      .minus .sign { color: var(--red); }
+
+      .nav-head {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .nav-title {
+        margin: 0;
+        font-size: 18px;
+        color: #f1f5f8;
+      }
+
+      .nav-subtitle {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .vcs-switcher {
+        padding: 10px 14px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .vcs-pill {
+        padding: 6px 9px;
+        border: 1px solid rgba(79, 96, 120, 0.24);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .vcs-pill.active.git {
+        color: var(--accent);
+        border-color: rgba(243, 198, 111, 0.22);
+        background: rgba(243, 198, 111, 0.08);
+      }
+
+      .vcs-pill.active.gitlab {
+        color: var(--orange);
+        border-color: rgba(227, 171, 100, 0.22);
+        background: rgba(227, 171, 100, 0.08);
+      }
+
+      .vcs-pill.active.gitbutler {
+        color: var(--purple);
+        border-color: rgba(177, 143, 255, 0.22);
+        background: rgba(177, 143, 255, 0.08);
+      }
+
+      .nav-body {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .section-title {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 10px 14px 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        background: rgba(12, 17, 23, 0.98);
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .history-entry,
+      .tree-node {
+        padding: 9px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      .history-entry.selected,
+      .tree-node.selected {
+        background: linear-gradient(180deg, rgba(24, 33, 44, 0.98), rgba(18, 26, 35, 0.98));
+        box-shadow: inset 2px 0 0 var(--accent);
+      }
+
+      .history-top,
+      .tree-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: baseline;
+      }
+
+      .history-sha {
+        color: var(--accent);
+        font-size: 12px;
+      }
+
+      .history-kind {
+        color: var(--blue);
+        font-size: 11px;
+      }
+
+      .history-msg,
+      .tree-name {
+        margin-top: 5px;
+        font-size: 13px;
+        color: var(--text);
+      }
+
+      .history-meta,
+      .tree-meta,
+      .tree-path {
+        margin-top: 5px;
+        font-size: 11px;
+        color: var(--dim);
+      }
+
+      .tree-node.folder {
+        padding-bottom: 6px;
+      }
+
+      .tree-node.file {
+        display: grid;
+        gap: 4px;
+      }
+
+      .tree-main {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .indent-1 { padding-left: 28px; }
+      .indent-2 { padding-left: 44px; }
+      .indent-3 { padding-left: 60px; }
+
+      .caret,
+      .icon {
+        color: var(--dim);
+        width: 12px;
+        text-align: center;
+        flex: 0 0 auto;
+      }
+
+      .tag {
+        color: var(--muted);
+      }
+
+      .tag.add { color: var(--green); }
+      .tag.del { color: var(--red); }
+      .tag.focus { color: var(--accent); }
+      .tag.thread { color: var(--blue); }
+      .tag.stack { color: var(--purple); }
+
+      @media (max-width: 1100px) {
+        .body {
+          grid-template-columns: 1fr;
+        }
+
+        .diff-pane {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="top-left">
+          <span class="brand">review.nvim</span>
+          <span>PR #6</span>
+          <span>branch/auth-hardening → main</span>
+        </div>
+        <div class="top-right">
+          <span>11 files</span>
+          <span>+243 / -41</span>
+          <span>2 open threads</span>
+        </div>
+      </header>
+
+      <section class="body">
+        <section class="diff-pane">
+          <header class="filebar">
+            <div>
+              <div class="filebar-title">lua/security/auth.lua</div>
+              <div class="filebar-subtitle">new file · focus: new file, large addition, not reviewed yet</div>
+            </div>
+            <div class="filebar-tools">
+              <span class="tool">a note</span>
+              <span class="tool">s split</span>
+              <span class="tool">N notes</span>
+              <span class="tool">]f next</span>
+            </div>
+          </header>
+
+          <div class="diff">
+            <div class="hunk">
+              <div class="hunk-head">@@ -0,84 +0,84 · validate_token</div>
+
+              <div class="line ctx">
+                <span class="num"></span>
+                <span class="num">1</span>
+                <span class="sign">+</span>
+                <span class="code">local M = {}</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">18</span>
+                <span class="sign">+</span>
+                <span class="code">if token == nil or #token &lt; 16 then</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">19</span>
+                <span class="sign">+</span>
+                <span class="code">  return false, "token too short"</span>
+              </div>
+
+              <div class="line ctx">
+                <span class="num"></span>
+                <span class="num">20</span>
+                <span class="sign"> </span>
+                <span class="code">end</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">36</span>
+                <span class="sign">+</span>
+                <span class="code">local ok, claims = jwt.decode(token, { verify = false })</span>
+              </div>
+
+              <div class="line plus">
+                <span class="num"></span>
+                <span class="num">67</span>
+                <span class="sign">+</span>
+                <span class="code">if claims.exp and claims.exp &lt; os.time() then</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="navigator">
+          <div class="nav-head">
+            <h1 class="nav-title">Navigator</h1>
+            <div class="nav-subtitle">History and file tree share one pane. Diff stays primary.</div>
+          </div>
+
+          <div class="vcs-switcher">
+            <span class="vcs-pill active git">Git</span>
+            <span class="vcs-pill gitlab">GitLab MR</span>
+            <span class="vcs-pill gitbutler">GitButler stack</span>
+          </div>
+
+          <div class="nav-body">
+            <div class="section-title">History · Git</div>
+
+            <article class="history-entry selected">
+              <div class="history-top">
+                <span class="history-sha">8bd1e1c</span>
+                <span class="history-kind">HEAD</span>
+              </div>
+              <div class="history-msg">Add auth validation and token checks</div>
+              <div class="history-meta">you · 8m ago · 3 files changed</div>
+            </article>
+
+            <article class="history-entry">
+              <div class="history-top">
+                <span class="history-sha">ae04c83</span>
+                <span class="history-kind">commit</span>
+              </div>
+              <div class="history-msg">Refactor billing branch handling</div>
+              <div class="history-meta">you · 16m ago · 2 files changed</div>
+            </article>
+
+            <article class="history-entry">
+              <div class="history-top">
+                <span class="history-sha">22f89ac</span>
+                <span class="history-kind">commit</span>
+              </div>
+              <div class="history-msg">Prompt cleanup for agent pipeline</div>
+              <div class="history-meta">you · 29m ago · 1 file changed</div>
+            </article>
+
+            <div class="section-title">Files · Tree</div>
+
+            <div class="tree-node folder">
+              <div class="tree-main">
+                <span class="caret">▾</span>
+                <span class="tree-name">lua</span>
+              </div>
+              <div class="tree-meta">7 files · +201 / -31</div>
+            </div>
+
+            <div class="tree-node folder indent-1">
+              <div class="tree-main">
+                <span class="caret">▾</span>
+                <span class="tree-name">security</span>
+              </div>
+            </div>
+
+            <div class="tree-node file indent-2 selected">
+              <div class="tree-top">
+                <div class="tree-main">
+                  <span class="icon">•</span>
+                  <span class="tree-name">auth.lua</span>
+                </div>
+                <div class="tree-meta">
+                  <span class="tag add">+84</span>
+                  <span class="tag del">-3</span>
+                </div>
+              </div>
+              <div class="tree-path">new file · not reviewed yet</div>
+            </div>
+
+            <div class="tree-node folder indent-1">
+              <div class="tree-main">
+                <span class="caret">▾</span>
+                <span class="tree-name">payments</span>
+              </div>
+            </div>
+
+            <div class="tree-node file indent-2">
+              <div class="tree-top">
+                <div class="tree-main">
+                  <span class="icon">•</span>
+                  <span class="tree-name">billing.lua</span>
+                </div>
+                <div class="tree-meta">
+                  <span class="tag add">+61</span>
+                  <span class="tag del">-18</span>
+                </div>
+              </div>
+              <div class="tree-path">1 open thread · wide diff</div>
+            </div>
+
+            <div class="tree-node folder indent-1">
+              <div class="tree-main">
+                <span class="caret">▾</span>
+                <span class="tree-name">ai</span>
+              </div>
+            </div>
+
+            <div class="tree-node file indent-2">
+              <div class="tree-top">
+                <div class="tree-main">
+                  <span class="icon">•</span>
+                  <span class="tree-name">prompts.lua</span>
+                </div>
+                <div class="tree-meta">
+                  <span class="tag add">+47</span>
+                  <span class="tag del">-2</span>
+                </div>
+              </div>
+              <div class="tree-path">untouched</div>
+            </div>
+
+            <div class="section-title">Alternative History Modes</div>
+
+            <article class="history-entry">
+              <div class="history-top">
+                <span class="history-sha">GitLab MR</span>
+                <span class="history-kind">review</span>
+              </div>
+              <div class="history-msg">MR #128 · source/auth-hardening → main</div>
+              <div class="history-meta">show commits, discussions, approvals inline</div>
+            </article>
+
+            <article class="history-entry">
+              <div class="history-top">
+                <span class="history-sha">GitButler</span>
+                <span class="history-kind tag stack">stack</span>
+              </div>
+              <div class="history-msg">Stack: auth hardening</div>
+              <div class="history-meta">show virtual branches / stack order instead of plain commits</div>
+            </article>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="statusbar">
+        <div class="status-left">
+          <span>q close</span>
+          <span>? help</span>
+          <span>]c/[c hunks</span>
+          <span>]f/[f files</span>
+        </div>
+        <div class="status-right">
+          <span>history source changes by VCS mode: git / gitlab / gitbutler</span>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>

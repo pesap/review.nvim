@@ -236,6 +236,14 @@ describe("word diff", function()
     assert.are.equal(3, old_r[1][2])
   end)
 
+  it("skips word ranges when max_line_length is exceeded", function()
+    local old_r, new_r = diff.word_diff(string.rep("a", 40), string.rep("b", 40), {
+      max_line_length = 32,
+    })
+    assert.are.same({}, old_r)
+    assert.are.same({}, new_r)
+  end)
+
   it("pairs consecutive del/add lines", function()
     local hunk = {
       header = "@@ -1,3 +1,3 @@",

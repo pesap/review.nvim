@@ -31,10 +31,55 @@ end, {
   desc = "Re-fetch PR/MR comments from remote",
 })
 
+vim.api.nvim_create_user_command("ReviewHunk", function(opts)
+  require("review").open_hunk(opts.fargs)
+end, {
+  nargs = "*",
+  desc = "Open or reload Hunk for the current review",
+})
+
+vim.api.nvim_create_user_command("ReviewNotes", function()
+  require("review").open_notes()
+end, {
+  desc = "Open the review notes list",
+})
+
+vim.api.nvim_create_user_command("ReviewHelp", function()
+  require("review").open_help()
+end, {
+  desc = "Open review help",
+})
+
+vim.api.nvim_create_user_command("ReviewComment", function(opts)
+  require("review").add_note(opts.fargs)
+end, {
+  nargs = "*",
+  desc = "Add a review note",
+})
+
+vim.api.nvim_create_user_command("ReviewSuggestion", function(opts)
+  require("review").add_suggestion(opts.fargs)
+end, {
+  nargs = "*",
+  desc = "Add a review suggestion",
+})
+
 vim.api.nvim_create_user_command("ReviewExport", function(opts)
   require("review").export(opts.fargs[1])
 end, {
   nargs = "?",
   desc = "Export review notes to markdown",
   complete = "file",
+})
+
+vim.api.nvim_create_user_command("ReviewClipboard", function()
+  require("review").copy_notes_to_clipboard()
+end, {
+  desc = "Copy review notes to the clipboard",
+})
+
+vim.api.nvim_create_user_command("ReviewClearLocal", function()
+  require("review").clear_local_notes()
+end, {
+  desc = "Clear all local review notes with confirmation",
 })

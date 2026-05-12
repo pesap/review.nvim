@@ -80,6 +80,34 @@ You can also set up a keymap to toggle the review panel: >lua
 
                             require("review").toggle()
 <
+                                                            *:ReviewHelp*
+:ReviewHelp             Open a floating help window with review commands
+                        and buffer-local keymaps.
+
+                                                             *:ReviewHunk*
+:ReviewHunk [ref]       Open or reload Hunk for the current review. In native
+                        companion mode, this gives you on-demand Hunk without
+                        replacing the built-in review.nvim UI.
+
+                                                             *:ReviewNotes*
+:ReviewNotes            Open the notes list for the current review session.
+                        Useful in Hunk mode, where notes are managed from
+                        commands instead of native diff keymaps.
+
+                                                           *:ReviewComment*
+:ReviewComment [target] Add a review note. In native mode, this behaves like
+                        pressing `a` in the diff buffer. In Hunk mode, it
+                        uses the selected Hunk. You can also
+                        pass an explicit target:
+
+                            :ReviewComment README.md:103
+                            :ReviewComment lua/review.lua 42 old
+<
+                                                        *:ReviewSuggestion*
+:ReviewSuggestion       Add a suggestion note. In Hunk mode, it uses the
+                        selected Hunk unless you pass an
+                        explicit target like |:ReviewComment|.
+
                                                               *:ReviewClose*
 :ReviewClose            Close the review layout and end the session.
 
@@ -90,6 +118,14 @@ You can also set up a keymap to toggle the review panel: >lua
                                                              *:ReviewExport*
 :ReviewExport [path]    Export all notes to a markdown file. Defaults to
                         `review-notes.md` in the current directory.
+
+                                                          *:ReviewClipboard*
+:ReviewClipboard        Copy all current notes and remote threads to the
+                        clipboard for sharing with an LLM or another tool.
+
+                                                         *:ReviewClearLocal*
+:ReviewClearLocal       Clear all local draft/staged notes after confirmation.
+                        Remote GitHub/GitLab threads are kept.
 
 ==============================================================================
 5. KEYMAPS                                                  *review-keymaps*
@@ -102,7 +138,8 @@ Explorer panel:~
     <CR>        Select a commit or file under the cursor. Selecting a
                 commit filters the file list to that commit's changes.
                 Selecting "All changes" shows the full diff.
-    q           Close the review.
+    ?           Open review help.
+    q           Close the full review layout.
 
 Diff viewer:~
 
@@ -112,6 +149,7 @@ Diff viewer:~
     e           Edit the note on the current line.
     d           Delete the note on the current line.
     N           Show all notes in a floating list.
+    ?           Open review help.
     ]c          Jump to the next hunk.
     [c          Jump to the previous hunk.
     ]f          Jump to the next file.
@@ -119,7 +157,31 @@ Diff viewer:~
     ]n          Jump to the next note (across files).
     [n          Jump to the previous note (across files).
     s           Toggle between unified and side-by-side split view.
-    q           Close the review.
+    q           Close the full review layout.
+
+Hunk workflow:~
+
+    :Review              Open or reload the live Hunk session.
+    :ReviewHunk          Open or reload Hunk explicitly.
+    :ReviewComment       Add a note at the selected Hunk.
+    :ReviewSuggestion    Add a suggestion at the selected Hunk.
+    :ReviewNotes         Open the notes list to stage/publish notes.
+    :ReviewClipboard     Copy all notes and threads to the clipboard.
+    :ReviewClearLocal    Clear local notes after confirmation.
+    :ReviewRefresh       Re-fetch PR/MR comments and re-sync them into Hunk.
+
+Hunk companion mode:~
+
+    If you want faster startup and native note handling, keep
+    `viewer = "native"` and set:
+
+        hunk = {
+          mode = "companion",
+        }
+
+    In companion mode, `:Review` stays in the native review.nvim diff UI.
+    `:ReviewHunk` opens Hunk on demand, and review notes are mirrored into
+    any live Hunk session for the current repo.
 
 Notes list (N):~
                                                          *review-notes-list*
@@ -128,10 +190,12 @@ Notes list (N):~
     k / [n      Jump to previous note entry.
     <CR>        Jump to the note in the diff view.
     dd          Delete the note.
-    p           Toggle the note between draft and staged.
+    s           Toggle the note between draft and staged.
     P           Publish all staged notes.
-    C           Clear all notes.
+    y           Copy all notes and threads to the clipboard.
+    C           Clear all local notes after confirmation.
     gd          Jump to a referenced note (`#<id>` in the note body).
+    ?           Open review help.
     q / <Esc>   Close the list.
 
 Note float:~
@@ -147,7 +211,7 @@ Note float:~
 Notes go through three stages:
 
   Draft (`-`)     Newly created notes start here.
-  Staged (`+`)    Press `p` in the notes list to mark as ready to publish.
+  Staged (`+`)    Press `s` in the notes list to mark as ready to publish.
   Published (`*`) Press `P` to publish all staged notes at once.
 
 Notes are persisted automatically across sessions. They are stored as JSON
@@ -178,12 +242,30 @@ Default configuration: >lua
 
     require("review").setup({
       view = "unified",       -- "unified" or "split"
+      viewer = "native",      -- "native" or "hunk"
+      hunk = {
+        mode = "session",     -- "session" or "companion"
+      },
+      render = {
+        word_diff = {
+          enabled = true,         -- inline word diff for paired changes
+          max_line_length = 300,  -- skip very long lines
+          max_pairs_per_hunk = 64,
+          max_hunk_lines = 200,
+          max_file_lines = 1500,  -- large files use line-level highlighting only
+        },
+      },
+      notifications = {
+        context = false,      -- suppress PR/base context info messages
+      },
+      vcs_mode = "auto",      -- "auto" | "git" | "gitlab" | "gitbutler"
       colorblind = true,      -- blue/yellow scheme (default)
                               -- set to false for red/green
       keymaps = {
         add_note = "a",
         edit_note = "e",
         delete_note = "d",
+        help = "?",
         next_hunk = "]c",
         prev_hunk = "[c",
         next_file = "]f",
@@ -205,6 +287,7 @@ Run `:checkhealth review` to verify your environment:
 
 - git is installed
 - gh and/or glab CLI are installed
+- hunk is installed when `viewer = "hunk"`
 - gh/glab authentication is configured (`gh auth login`, `glab auth login`)
 - Missing CLI is reported as an error for the detected forge
 - Current directory is a git repository

@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>review.nvim pane mock</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #111821;
+        --panel-2: #151f2b;
+        --panel-3: #0f151d;
+        --border: #273242;
+        --edge: #334156;
+        --text: #d9e2ec;
+        --muted: #7f91a6;
+        --soft: #98a8bb;
+        --accent: #f2bf68;
+        --accent-2: #6fc3df;
+        --green: #67d49b;
+        --red: #f08c7c;
+        --focus: #f7d774;
+        --shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+        --radius: 18px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top left, rgba(111, 195, 223, 0.12), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(242, 191, 104, 0.12), transparent 32%),
+          linear-gradient(180deg, #0a0d12 0%, #0b1016 100%);
+        color: var(--text);
+        font-family: "Iosevka", "JetBrains Mono", "SF Mono", "IBM Plex Mono", monospace;
+      }
+
+      .frame {
+        width: min(1320px, calc(100vw - 32px));
+        min-height: min(820px, calc(100vh - 32px));
+        display: grid;
+        grid-template-columns: 348px 1fr;
+        background: rgba(9, 12, 17, 0.88);
+        border: 1px solid rgba(70, 87, 111, 0.38);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        backdrop-filter: blur(18px);
+      }
+
+      .sidebar {
+        background: linear-gradient(180deg, rgba(17, 24, 33, 0.98), rgba(13, 18, 26, 0.98));
+        border-right: 1px solid rgba(70, 87, 111, 0.28);
+        padding: 22px 18px 18px;
+      }
+
+      .content {
+        background:
+          linear-gradient(180deg, rgba(16, 22, 30, 0.96), rgba(11, 15, 21, 0.98));
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .section-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .sidebar-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .sidebar-title {
+        margin: 8px 0 4px;
+        font-size: 26px;
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: -0.04em;
+        color: #f4f7fb;
+      }
+
+      .sidebar-subtitle {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--soft);
+      }
+
+      .review-badge {
+        padding: 8px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(111, 195, 223, 0.28);
+        background: rgba(111, 195, 223, 0.09);
+        color: var(--accent-2);
+        font-size: 12px;
+      }
+
+      .progress-card {
+        margin-top: 18px;
+        padding: 16px;
+        border-radius: var(--radius);
+        border: 1px solid rgba(70, 87, 111, 0.28);
+        background: linear-gradient(180deg, rgba(22, 31, 43, 0.98), rgba(16, 23, 32, 0.98));
+      }
+
+      .progress-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .progress-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #f5f7fa;
+      }
+
+      .progress-copy {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .progress-bar {
+        height: 10px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+      }
+
+      .progress-fill {
+        width: 46%;
+        height: 100%;
+        background: linear-gradient(90deg, var(--accent) 0%, #f7d774 52%, #ffe59a 100%);
+      }
+
+      .progress-grid {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .stat {
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+      }
+
+      .stat-label {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .stat-value {
+        margin-top: 6px;
+        font-size: 18px;
+        color: #f1f4f8;
+      }
+
+      .hotspots {
+        margin-top: 18px;
+      }
+
+      .hotspot-list,
+      .file-list {
+        margin-top: 10px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .hotspot {
+        padding: 14px 14px 12px;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(23, 33, 45, 0.98), rgba(17, 24, 34, 0.98));
+        border: 1px solid rgba(78, 94, 117, 0.22);
+      }
+
+      .hotspot.is-active {
+        border-color: rgba(242, 191, 104, 0.55);
+        box-shadow: inset 0 0 0 1px rgba(242, 191, 104, 0.18);
+      }
+
+      .hotspot-top,
+      .file-top {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .hotspot-rank {
+        color: var(--focus);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .hotspot-name,
+      .file-name {
+        margin-top: 4px;
+        font-size: 15px;
+        color: #f1f5f9;
+      }
+
+      .hotspot-score {
+        color: var(--focus);
+        font-size: 12px;
+      }
+
+      .hotspot-reasons {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .tag {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--soft);
+        font-size: 11px;
+      }
+
+      .hotspot-meta,
+      .file-meta {
+        margin-top: 10px;
+        display: flex;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .files {
+        margin-top: 18px;
+      }
+
+      .file {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(78, 94, 117, 0.18);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .file.is-selected {
+        background: linear-gradient(180deg, rgba(25, 35, 49, 0.98), rgba(17, 24, 34, 0.98));
+        border-color: rgba(111, 195, 223, 0.35);
+      }
+
+      .file-path {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .status.modified {
+        color: var(--accent);
+      }
+
+      .status.new {
+        color: var(--green);
+      }
+
+      .status.deleted {
+        color: var(--red);
+      }
+
+      .content-header {
+        padding: 18px 22px 16px;
+        border-bottom: 1px solid rgba(70, 87, 111, 0.2);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .content-title {
+        font-size: 18px;
+        color: #f1f5f9;
+      }
+
+      .content-subtitle {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(78, 94, 117, 0.24);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--soft);
+        font-size: 12px;
+      }
+
+      .diff {
+        padding: 18px 22px 24px;
+        overflow: auto;
+      }
+
+      .diff-block {
+        border-radius: 18px;
+        overflow: hidden;
+        border: 1px solid rgba(78, 94, 117, 0.2);
+        background: rgba(13, 19, 27, 0.82);
+      }
+
+      .hunk {
+        padding: 10px 16px;
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        border-bottom: 1px solid rgba(78, 94, 117, 0.16);
+        font-size: 12px;
+      }
+
+      .line {
+        display: grid;
+        grid-template-columns: 62px 62px 22px 1fr;
+        gap: 0;
+        font-size: 13px;
+      }
+
+      .line > span {
+        padding: 8px 12px;
+      }
+
+      .line-num,
+      .line-sign {
+        color: #607086;
+        border-right: 1px solid rgba(78, 94, 117, 0.12);
+      }
+
+      .line-code {
+        white-space: pre;
+      }
+
+      .line.context .line-code {
+        color: #a8b4c2;
+      }
+
+      .line.add {
+        background: rgba(103, 212, 155, 0.08);
+      }
+
+      .line.add .line-sign,
+      .line.add .line-code mark {
+        color: var(--green);
+      }
+
+      .line.del {
+        background: rgba(240, 140, 124, 0.08);
+      }
+
+      .line.del .line-sign,
+      .line.del .line-code mark {
+        color: var(--red);
+      }
+
+      mark {
+        background: transparent;
+        font-weight: 700;
+        padding: 0;
+      }
+
+      @media (max-width: 980px) {
+        .frame {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: 0;
+          border-bottom: 1px solid rgba(70, 87, 111, 0.28);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="frame">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div>
+            <div class="section-label">Review Navigator</div>
+            <h1 class="sidebar-title">PR #6</h1>
+            <p class="sidebar-subtitle">Use the left pane to decide what to open next, not to read an essay.</p>
+          </div>
+          <div class="review-badge">main</div>
+        </div>
+
+        <section class="progress-card">
+          <div class="progress-meta">
+            <div>
+              <div class="section-label">Progress</div>
+              <div class="progress-value">46%</div>
+            </div>
+            <div class="progress-copy">5 of 11 files reviewed</div>
+          </div>
+
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+
+          <div class="progress-grid">
+            <div class="stat">
+              <div class="stat-label">Commented</div>
+              <div class="stat-value">3 files</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Untouched</div>
+              <div class="stat-value">4 files</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Open Threads</div>
+              <div class="stat-value">2 threads</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Focus Items</div>
+              <div class="stat-value">3 files</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="hotspots">
+          <div class="section-label">Hotspots</div>
+          <div class="hotspot-list">
+            <article class="hotspot is-active">
+              <div class="hotspot-top">
+                <div>
+                  <div class="hotspot-rank">1. Focus first</div>
+                  <div class="hotspot-name">auth.lua</div>
+                </div>
+                <div class="hotspot-score">score 5</div>
+              </div>
+              <div class="hotspot-reasons">
+                <span class="tag">new file</span>
+                <span class="tag">large addition</span>
+                <span class="tag">0 notes</span>
+              </div>
+              <div class="hotspot-meta">
+                <span>+84 -3</span>
+                <span>mostly new logic</span>
+              </div>
+            </article>
+
+            <article class="hotspot">
+              <div class="hotspot-top">
+                <div>
+                  <div class="hotspot-rank">2. Focus first</div>
+                  <div class="hotspot-name">billing.lua</div>
+                </div>
+                <div class="hotspot-score">score 4</div>
+              </div>
+              <div class="hotspot-reasons">
+                <span class="tag">wide diff</span>
+                <span class="tag">many additions</span>
+              </div>
+              <div class="hotspot-meta">
+                <span>+61 -18</span>
+                <span>1 open thread</span>
+              </div>
+            </article>
+
+            <article class="hotspot">
+              <div class="hotspot-top">
+                <div>
+                  <div class="hotspot-rank">3. Focus first</div>
+                  <div class="hotspot-name">prompts.lua</div>
+                </div>
+                <div class="hotspot-score">score 3</div>
+              </div>
+              <div class="hotspot-reasons">
+                <span class="tag">not reviewed yet</span>
+                <span class="tag">mostly new logic</span>
+              </div>
+              <div class="hotspot-meta">
+                <span>+47 -2</span>
+                <span>untouched</span>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="files">
+          <div class="section-label">Files</div>
+          <div class="file-list">
+            <article class="file is-selected">
+              <div class="file-top">
+                <div class="file-name">auth.lua</div>
+                <div class="status new">new</div>
+              </div>
+              <div class="file-path">lua/security/auth.lua</div>
+              <div class="file-meta">
+                <span>+84 -3</span>
+                <span>0 notes</span>
+              </div>
+            </article>
+
+            <article class="file">
+              <div class="file-top">
+                <div class="file-name">billing.lua</div>
+                <div class="status modified">modified</div>
+              </div>
+              <div class="file-path">lua/payments/billing.lua</div>
+              <div class="file-meta">
+                <span>+61 -18</span>
+                <span>1 thread</span>
+              </div>
+            </article>
+
+            <article class="file">
+              <div class="file-top">
+                <div class="file-name">prompts.lua</div>
+                <div class="status modified">modified</div>
+              </div>
+              <div class="file-path">lua/ai/prompts.lua</div>
+              <div class="file-meta">
+                <span>+47 -2</span>
+                <span>untouched</span>
+              </div>
+            </article>
+          </div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <header class="content-header">
+          <div>
+            <div class="content-title">auth.lua</div>
+            <div class="content-subtitle">new file · 84 additions · focus: new file, large addition, not reviewed yet</div>
+          </div>
+          <div class="toolbar">
+            <span class="pill">next file</span>
+            <span class="pill">note</span>
+            <span class="pill">split</span>
+            <span class="pill">notes</span>
+          </div>
+        </header>
+
+        <div class="diff">
+          <div class="diff-block">
+            <div class="hunk">@@ -0,84 +0,84 · function validate_token</div>
+
+            <div class="line context">
+              <span class="line-num"></span>
+              <span class="line-num">1</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">local M = {}</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">18</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">if token == nil or <mark>#token</mark> &lt; 16 then</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">19</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">  return false, "token too short"</span>
+            </div>
+
+            <div class="line context">
+              <span class="line-num"></span>
+              <span class="line-num">20</span>
+              <span class="line-sign"> </span>
+              <span class="line-code">end</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">36</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">local ok, claims = jwt.decode(token, { <mark>verify = false</mark> })</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">37</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">if not ok then</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">38</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">  return false, "invalid token"</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">67</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">if claims.exp and claims.exp &lt; os.time() then</span>
+            </div>
+
+            <div class="line add">
+              <span class="line-num"></span>
+              <span class="line-num">68</span>
+              <span class="line-sign">+</span>
+              <span class="line-code">  return false, "expired"</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -51,11 +51,15 @@ function M.check()
   )
 
   local config = require("review").config or {}
-  if config.viewer == "hunk" then
+  if config.viewer == "hunk" or (config.hunk and config.hunk.mode == "companion") then
     if vim.fn.executable("hunk") == 1 then
       vim.health.ok("hunk CLI is installed")
     else
-      vim.health.error("hunk CLI is not installed", { "Install: npm i -g hunkdiff" })
+      if config.viewer == "hunk" then
+        vim.health.error("hunk CLI is not installed", { "Install: npm i -g hunkdiff" })
+      else
+        vim.health.warn("hunk CLI is not installed", { "Install: npm i -g hunkdiff" })
+      end
     end
   end
 
