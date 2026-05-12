@@ -31,13 +31,6 @@ end, {
   desc = "Re-fetch PR/MR comments from remote",
 })
 
-vim.api.nvim_create_user_command("ReviewHunk", function(opts)
-  require("review").open_hunk(opts.fargs)
-end, {
-  nargs = "*",
-  desc = "Open or reload Hunk for the current review",
-})
-
 vim.api.nvim_create_user_command("ReviewNotes", function()
   require("review").open_notes()
 end, {

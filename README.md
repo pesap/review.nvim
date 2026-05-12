@@ -14,7 +14,7 @@ Minimal code review plugin for Neovim.
 - Suggestion notes with GitHub-compatible `suggestion` blocks
 - Notes list panel with draft/staged/published workflow
 - Note persistence across sessions
-- Live Hunk session integration with inline note mirroring
+- Grouped thread queue for GitHub/GitLab and local notes
 - Reference other notes with `#<id>` syntax
 - Export notes to markdown
 - Copy all notes to the clipboard for LLM handoff
@@ -30,14 +30,19 @@ Minimal code review plugin for Neovim.
 - `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
 - `plenary.nvim` for tests
 
-You only need `gh` or `glab` for the forge you use. The optional Hunk viewer requires the `hunk` CLI from `hunkdiff`.
+You only need `gh` or `glab` for the forge you use.
 
 ## Install
 
 lazy.nvim:
 
 ```lua
-{ "pesap/review.nvim", config = function() require("review").setup() end }
+{
+  "pesap/review.nvim",
+  config = function()
+    require("review").setup()
+  end,
+}
 ```
 
 ## Usage
@@ -48,10 +53,9 @@ lazy.nvim:
 :Review main         " diff against main
 :ReviewToggle        " open/close
 :ReviewHelp          " open review help
-:ReviewHunk          " open or reload Hunk for the current review
 :ReviewNotes         " open notes list from anywhere
-:ReviewComment       " add note at current Hunk location (or pass path/line)
-:ReviewSuggestion    " add suggestion at current Hunk location
+:ReviewComment       " add note at cursor, selection, or an explicit path/line target
+:ReviewSuggestion    " add suggestion at cursor, selection, or an explicit path/line target
 :ReviewExport        " export notes to markdown
 :ReviewClipboard     " copy all notes to the clipboard
 :ReviewClipboardLocal " copy only local notes to the clipboard
@@ -68,11 +72,7 @@ vim.keymap.set("n", "<leader>rr", "<cmd>ReviewToggle<cr>", { desc = "Toggle revi
 
 ```lua
 require("review").setup({
-  view = "unified",       -- "unified" or "split" for the native viewer
-  viewer = "native",      -- "native" or "hunk"
-  hunk = {
-    mode = "session",     -- "session" = full Hunk UI, "companion" = keep native UI and sync to any live Hunk session
-  },
+  view = "unified",       -- "unified" or "split"
   render = {
     word_diff = {
       enabled = true,         -- inline changed-text highlights for paired del/add lines
@@ -85,7 +85,6 @@ require("review").setup({
   notifications = {
     context = false,      -- suppress "Reviewing PR #... against main" info messages
   },
-  vcs_mode = "auto",      -- "auto" | "git" | "gitlab" | "gitbutler" for navigator history labels
   colorblind = true,      -- blue/yellow scheme (default), set false for red/green
   provider = nil,         -- "github" | "gitlab" | nil (auto-detect from origin URL)
   keymaps = {
@@ -100,6 +99,9 @@ require("review").setup({
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",
+    toggle_stack = "T",
+    focus_files = "f",
+    focus_threads = "t",
     notes_list = "N",
     suggestion = "S",
     close = "q",
@@ -107,58 +109,15 @@ require("review").setup({
 })
 ```
 
-## Hunk viewer
+## Explicit note targets
 
-To use [Hunk](https://github.com/modem-dev/hunk) as the diff surface:
-
-```bash
-npm i -g hunkdiff
-```
-
-```lua
-require("review").setup({
-  viewer = "hunk",
-})
-```
-
-With `viewer = "hunk"`, `:Review` opens or reloads a Hunk session for the current repo while `review.nvim` keeps the draft/staged/publish workflow in Neovim. `:Review HEAD~3` forwards the ref to `hunk diff HEAD~3`.
-
-When a PR/MR is detected:
-
-- `:ReviewRefresh` fetches GitHub/GitLab threads and mirrors inline comments into the live Hunk session
-- `:ReviewComment` and `:ReviewSuggestion` create review notes from the current Hunk selection
-- `:ReviewNotes` opens the notes list so you can stage, publish, refresh, and inspect threads
-
-You can also target a location explicitly:
+`review.nvim` can place notes from the current cursor or selection, but you can also target a location explicitly:
 
 ```vim
 :ReviewComment README.md:103
 :ReviewComment lua/review.lua 42 old
+:ReviewSuggestion lua/review.lua:57:new
 ```
-
-`review.nvim` treats Hunk's inline comments as a projection of the current plugin session, so refreshing or re-syncing rewrites the Hunk overlay from the plugin's note state.
-
-## Hunk companion mode
-
-If you want faster startup and native note handling, keep the native viewer and use Hunk as a companion instead of the primary UI:
-
-```lua
-require("review").setup({
-  viewer = "native",
-  hunk = {
-    mode = "companion",
-  },
-})
-```
-
-In companion mode:
-
-- `:Review` stays in the native `review.nvim` diff UI
-- note creation, staging, publishing, and navigation stay entirely in the native buffers
-- `:ReviewHunk` opens Hunk on demand for the current review range
-- if a live Hunk session already exists for the repo, `review.nvim` mirrors notes into it automatically
-
-This is the fast path if you want Hunk available without paying the cost of launching its full TUI on every review open.
 
 ## Keymaps
 
@@ -178,20 +137,22 @@ Diff viewer:
 | `]f` / `[f` | next/prev file                     |
 | `]n` / `[n` | next/prev note                     |
 | `s`         | toggle split                       |
+| `T`         | cycle stack/commit scope           |
+| `f`         | focus the Files section            |
+| `t`         | focus the Threads section          |
 | `q`         | close full review                  |
 
-Hunk viewer:
+Commands:
 
 | Command | What |
 | ------- | ---- |
-| `:ReviewHunk` | open or reload Hunk for the current review |
-| `:ReviewComment` | add a note at the selected Hunk |
-| `:ReviewSuggestion` | add a suggestion at the selected Hunk |
 | `:ReviewNotes` | open the notes list |
+| `:ReviewComment` | add a note at the cursor/selection or an explicit target |
+| `:ReviewSuggestion` | add a suggestion at the cursor/selection or an explicit target |
+| `:ReviewRefresh` | re-fetch PR/MR comments |
 | `:ReviewClipboard` | copy local notes, open threads, and discussion items to the clipboard |
 | `:ReviewClipboardLocal` | copy only local draft/staged notes to the clipboard |
 | `:ReviewClearLocal` | clear all local notes after confirmation |
-| `:ReviewRefresh` | re-fetch PR/MR comments and re-sync the Hunk overlay |
 
 Notes list:
 
@@ -224,6 +185,8 @@ Notes persist across sessions automatically. Reference other notes by typing `#<
 Use `:ReviewClipboard` or `y` from the notes list to copy the actionable review queue into your clipboard for LLM handoff: local notes, open threads, and discussion items. Resolved threads are left out.
 
 Use `:ReviewClipboardLocal` or `Y` if you only want your own local draft/staged notes.
+
+Remote review threads are shown separately from the file list in the sidebar, grouped by source such as `github/`, `gitlab/`, or `local/`.
 
 ## Inspiration
 
