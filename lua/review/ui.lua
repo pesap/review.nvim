@@ -1369,7 +1369,11 @@ local function render_explorer(buf)
     if #lines > 0 then
       add_separator(section_name)
     end
-    add_section_header(section_name, section_name == "stale" and "Stale" or "Threads", section_name == "stale" and HL.note_separator or HL.threads_header)
+    add_section_header(
+      section_name,
+      section_name == "stale" and "Stale" or "Threads",
+      section_name == "stale" and HL.note_separator or HL.threads_header
+    )
 
     for _, section in ipairs(sections) do
       local max_badge_width = 0
@@ -1442,7 +1446,11 @@ local function render_explorer(buf)
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 9, col_end = -1 })
   end
 
-  local scope_line = string.format("%sScope  %s", header_indent, truncate_end_text(active_scope_label(), math.max(explorer_width - 9, 8)))
+  local scope_line = string.format(
+    "%sScope  %s",
+    header_indent,
+    truncate_end_text(active_scope_label(), math.max(explorer_width - 9, 8))
+  )
   table.insert(lines, scope_line)
   table.insert(explorer_line_map, { type = "header", section = "scope" })
   table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 1, col_end = 6 })
