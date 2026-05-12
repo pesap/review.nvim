@@ -321,6 +321,38 @@ local function apply_review_window_style(win, kind)
   vim.wo[win].fillchars = "eob: "
 end
 
+---@param win number
+local function apply_git_window_style(win)
+  apply_review_window_style(win, "pane")
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].wrap = false
+  vim.wo[win].cursorline = true
+  vim.wo[win].cursorlineopt = "line"
+end
+
+---@param buf number
+local function render_missing_fugitive_buffer(buf)
+  local lines = {
+    " review.nvim could not open vim-fugitive.",
+    "",
+    " Install `tpope/vim-fugitive` to use the embedded git status pane.",
+    "",
+    " The rest of the review UI is still available.",
+  }
+
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  local ns = vim.api.nvim_create_namespace("review_git_placeholder")
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  vim.api.nvim_buf_add_highlight(buf, ns, HL.panel_title, 0, 1, -1)
+  vim.api.nvim_buf_add_highlight(buf, ns, HL.panel_meta, 2, 1, -1)
+  vim.api.nvim_buf_add_highlight(buf, ns, HL.meta, 4, 1, -1)
+end
+
 ---@param buf number
 local function attach_review_quit_guard(buf)
   vim.api.nvim_create_autocmd("QuitPre", {
@@ -393,6 +425,106 @@ end
 -- Stored per-render so keymaps can resolve cursor position.
 ---@type table[]|nil  Each: {type: "header"|"separator"|"commit"|"file"|"folder", idx: number|nil}
 local explorer_line_map = nil
+
+---@return ReviewFile|nil
+local function current_display_file()
+  return state.active_current_file()
+end
+
+---@return boolean
+local function worktree_git_enabled()
+  local s = state.get()
+  return s ~= nil and s.mode == "local" and s.requested_ref == nil
+end
+
+---@param buf number
+local function setup_git_keymaps(buf)
+  local opts = { buffer = buf, noremap = true, silent = true }
+  local km = require("review").config.keymaps
+
+  vim.keymap.set("n", km.close, function()
+    M.close()
+  end, opts)
+
+  vim.keymap.set("n", km.help, function()
+    M.open_help()
+  end, opts)
+
+  vim.keymap.set("n", km.focus_files, function()
+    M.focus_section("files")
+  end, opts)
+
+  vim.keymap.set("n", km.focus_threads, function()
+    M.focus_section("threads")
+  end, opts)
+end
+
+local function sync_local_review_state()
+  if not worktree_git_enabled() then
+    return
+  end
+  require("review").refresh_local_session()
+end
+
+---@param ui_state ReviewUIState
+local function ensure_git_status_pane(ui_state)
+  if not worktree_git_enabled() then
+    return
+  end
+  if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
+    return
+  end
+  if not ui_state.explorer_win or not vim.api.nvim_win_is_valid(ui_state.explorer_win) then
+    return
+  end
+
+  local original_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_set_current_win(ui_state.explorer_win)
+  vim.cmd("belowright split")
+
+  local git_win = vim.api.nvim_get_current_win()
+  local pane_height = math.max(8, math.min(12, math.floor(vim.o.lines * 0.2)))
+  vim.api.nvim_win_set_height(git_win, pane_height)
+  apply_git_window_style(git_win)
+
+  local git_mod = require("review.git")
+  local opened, err = git_mod.open_fugitive_status()
+  if opened then
+    if opened.win ~= git_win and vim.api.nvim_win_is_valid(git_win) and vim.api.nvim_buf_is_valid(opened.buf) then
+      vim.api.nvim_win_set_buf(git_win, opened.buf)
+      if vim.api.nvim_win_is_valid(opened.win) then
+        pcall(vim.api.nvim_win_close, opened.win, true)
+      end
+      opened.win = git_win
+    end
+    ui_state.git_win = opened.win
+    ui_state.git_buf = opened.buf
+    vim.b[opened.buf].review_git_pane = true
+  else
+    local fallback_buf = create_buf("review://git", { filetype = "markdown" })
+    vim.api.nvim_win_set_buf(git_win, fallback_buf)
+    render_missing_fugitive_buffer(fallback_buf)
+    ui_state.git_win = git_win
+    ui_state.git_buf = fallback_buf
+    if err and err ~= "" then
+      vim.schedule(function()
+        vim.notify(vim.trim(err), vim.log.levels.WARN)
+      end)
+    end
+  end
+
+  if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
+    apply_git_window_style(ui_state.git_win)
+  end
+  if ui_state.git_buf and vim.api.nvim_buf_is_valid(ui_state.git_buf) then
+    setup_git_keymaps(ui_state.git_buf)
+    attach_review_quit_guard(ui_state.git_buf)
+  end
+
+  if vim.api.nvim_win_is_valid(original_win) then
+    vim.api.nvim_set_current_win(original_win)
+  end
+end
 
 ---@param file ReviewFile
 ---@return table
@@ -611,6 +743,18 @@ local function session_stats()
     deletions = deletions + fdel
   end
   return #files, additions, deletions, #state.get_notes()
+end
+
+---@param files ReviewFile[]
+---@return number additions, number deletions
+local function aggregate_file_stats(files)
+  local additions, deletions = 0, 0
+  for _, file in ipairs(files) do
+    local fadd, fdel = file_stats(file)
+    additions = additions + fadd
+    deletions = deletions + fdel
+  end
+  return additions, deletions
 end
 
 ---@param file ReviewFile
@@ -1118,6 +1262,8 @@ end
 
 ---@param section string
 function M.focus_section(section)
+  sync_local_review_state()
+  M.refresh()
   local ui_state = state.get_ui()
   if not ui_state or not ui_state.explorer_win or not vim.api.nvim_win_is_valid(ui_state.explorer_win) then
     return
@@ -1130,13 +1276,25 @@ function M.focus_section(section)
   vim.api.nvim_win_set_cursor(ui_state.explorer_win, { line_nr, 0 })
 end
 
+function M.focus_git()
+  local ui_state = state.get_ui()
+  if not ui_state or not worktree_git_enabled() then
+    return
+  end
+
+  ensure_git_status_pane(ui_state)
+  if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
+    vim.api.nvim_set_current_win(ui_state.git_win)
+  end
+end
+
 local function update_window_chrome()
   local ui_state = state.get_ui()
   if not ui_state then
     return
   end
 
-  local file = state.active_current_file()
+  local file = current_display_file()
 
   if ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win) then
     vim.wo[ui_state.explorer_win].winbar = ""
@@ -1291,7 +1449,6 @@ local function render_explorer(buf)
   explorer_line_map = {}
 
   local active_files = state.active_files()
-  local _, additions, deletions = session_stats()
   local branch_line, base_line = navigator_context_lines()
   local header_indent = " "
   local file_indent = "  "
@@ -1309,6 +1466,7 @@ local function render_explorer(buf)
       table.insert(tracked_files, entry)
     end
   end
+  local additions, deletions = aggregate_file_stats(active_files)
 
   local function add_separator(section)
     table.insert(lines, " " .. string.rep("─", math.max(8, explorer_width - 3)))
@@ -1320,6 +1478,18 @@ local function render_explorer(buf)
     table.insert(lines, header_indent .. label)
     table.insert(explorer_line_map, { type = "header", section = section })
     table.insert(highlights, { line = #lines - 1, hl = hl, col_start = 1, col_end = -1 })
+  end
+
+  ---@param status string
+  ---@return string
+  local function status_highlight(status)
+    if status == "A" or status == "?" then
+      return HL.status_a
+    end
+    if status == "D" then
+      return HL.status_d
+    end
+    return HL.status_m
   end
 
   local function add_file_rows(section, entries)
@@ -1341,13 +1511,12 @@ local function render_explorer(buf)
         })
       end
 
-      local status_hl = HL.status_m
-      if file.status == "A" or file.status == "?" then
-        status_hl = HL.status_a
-      elseif file.status == "D" then
-        status_hl = HL.status_d
-      end
-      table.insert(highlights, { line = li, hl = status_hl, col_start = 2, col_end = 3 })
+      table.insert(highlights, {
+        line = li,
+        hl = status_highlight(file.status),
+        col_start = 2,
+        col_end = 3,
+      })
 
       local basename_col = line:find(basename, 1, true)
       if basename_col then
@@ -1463,6 +1632,7 @@ local function render_explorer(buf)
     table.insert(explorer_line_map, {
       type = row.type,
       idx = row.idx,
+      commit = row.commit,
       section = "scope",
     })
     local li = #lines - 1
@@ -1643,7 +1813,7 @@ local function render_diff(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "  No files to display" })
@@ -1669,7 +1839,7 @@ end
 --- Render note signs in the diff buffer.
 ---@param buf number
 function M.render_note_signs(buf)
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return
   end
@@ -1779,7 +1949,7 @@ end
 --- Update inline preview based on cursor position.
 ---@param buf number
 function M.update_inline_preview(buf)
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     clear_inline_preview()
     return
@@ -1958,7 +2128,7 @@ end
 
 --- Render the split view (old left, new right) for the current file.
 local function render_split(ui_state)
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return
   end
@@ -2115,7 +2285,11 @@ end
 --- Toggle between all, current-commit, and commit-picker scope modes.
 function M.toggle_stack_view()
   local s = state.get()
-  if not s or #s.commits == 0 then
+  if not s then
+    return
+  end
+  if #s.commits == 0 then
+    vim.notify("No commits in the current review range", vim.log.levels.INFO)
     return
   end
 
@@ -2141,6 +2315,16 @@ function M.select_file(idx)
   state.set_file(idx)
   M.refresh()
 end
+
+---@return table|nil
+local function explorer_entry_under_cursor()
+  if not explorer_line_map then
+    return nil
+  end
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  return explorer_line_map[cursor[1]]
+end
+
 
 --- Set up keymaps for the explorer buffer.
 ---@param buf number
@@ -2196,6 +2380,10 @@ local function setup_explorer_keymaps(buf)
     M.focus_section("files")
   end, opts)
 
+  vim.keymap.set("n", km.focus_git, function()
+    M.focus_git()
+  end, opts)
+
   vim.keymap.set("n", km.focus_threads, function()
     M.focus_section("threads")
   end, opts)
@@ -2222,7 +2410,7 @@ end
 --- Returns the source line number and side for the current cursor position.
 ---@return table|nil  {new_lnum, old_lnum, type}
 function M.get_cursor_line_info()
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return nil
   end
@@ -2258,7 +2446,7 @@ setup_diff_keymaps = function(buf)
   end, opts)
 
   vim.keymap.set("n", km.next_hunk, function()
-    local file = state.active_current_file()
+    local file = current_display_file()
     if not file then
       return
     end
@@ -2277,7 +2465,7 @@ setup_diff_keymaps = function(buf)
   end, opts)
 
   vim.keymap.set("n", km.prev_hunk, function()
-    local file = state.active_current_file()
+    local file = current_display_file()
     if not file then
       return
     end
@@ -2361,6 +2549,10 @@ setup_diff_keymaps = function(buf)
     M.focus_section("files")
   end, opts)
 
+  vim.keymap.set("n", km.focus_git, function()
+    M.focus_git()
+  end, opts)
+
   vim.keymap.set("n", km.focus_threads, function()
     M.focus_section("threads")
   end, opts)
@@ -2381,7 +2573,7 @@ setup_diff_keymaps = function(buf)
 
   -- <CR>: open thread view for the note under cursor
   vim.keymap.set("n", "<CR>", function()
-    local file = state.active_current_file()
+    local file = current_display_file()
     if not file then
       return
     end
@@ -2487,6 +2679,7 @@ function M.open()
 
   render_explorer(explorer_buf)
   render_diff(diff_buf)
+  ensure_git_status_pane(state.get_ui())
   update_window_chrome()
 
   local selection_line = navigator_selection_line()
@@ -2527,7 +2720,7 @@ function M.close()
     if ui and ui.tab then
       local tabs = vim.api.nvim_list_tabpages()
       if #tabs <= 1 then
-        for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
+        for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.git_buf, ui.split_buf }) do
           if buf and vim.api.nvim_buf_is_valid(buf) then
             vim.api.nvim_buf_delete(buf, { force = true })
           end
@@ -2656,7 +2849,7 @@ end
 ---@param opts table|nil  {range: boolean}
 function M.open_note_float(opts)
   opts = opts or {}
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return
   end
@@ -2700,7 +2893,7 @@ end
 
 --- Edit the note at the current cursor position.
 function M.edit_note_at_cursor()
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return
   end
@@ -2763,7 +2956,7 @@ end
 
 --- Delete the note at the current cursor position.
 function M.delete_note_at_cursor()
-  local file = state.active_current_file()
+  local file = current_display_file()
   if not file then
     return
   end
@@ -3987,9 +4180,10 @@ function M.open_help()
   add_item(km.help, "Open this help")
   add_item(km.notes_list, "Open notes list")
   add_item(km.focus_files, "Focus Files section")
+  add_item(km.focus_git, "Focus Fugitive status pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
-  add_item("<CR>", "Open file or thread row")
+  add_item("<CR>", "Open file or thread")
 
   add_section("Diff")
   add_item(km.add_note, "Add note")
@@ -4007,12 +4201,21 @@ function M.open_help()
   add_item(km.prev_note, "Previous note")
   add_item(km.toggle_split, "Toggle unified/split view")
   add_item(km.focus_files, "Focus Files section")
+  add_item(km.focus_git, "Focus Fugitive status pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
   add_item(km.notes_list, "Open notes list")
   add_item(km.close, "Close the full review layout")
   add_item(km.help, "Open this help")
   add_item("<CR>", "Open thread or edit note under cursor")
+
+  if worktree_git_enabled() then
+    add_section("Git")
+    add_item(km.focus_git, "Jump to the embedded Fugitive status pane")
+    add_item("-", "Fugitive stage or unstage under cursor")
+    add_item("cc", "Fugitive create commit")
+    add_item("A", "Fugitive stage all changes")
+  end
 
   add_section("Notes List")
   add_item("<CR>", "Open note location or thread")
@@ -4036,11 +4239,13 @@ function M.refresh()
     require("review").reopen_session()
     return
   end
+  sync_local_review_state()
   clear_inline_preview()
   local ui_state = state.get_ui()
   if not ui_state then
     return
   end
+  ensure_git_status_pane(ui_state)
   if vim.api.nvim_buf_is_valid(ui_state.explorer_buf) then
     render_explorer(ui_state.explorer_buf)
     local selection_line = navigator_selection_line()

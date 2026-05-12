@@ -34,6 +34,7 @@ local defaults = {
     toggle_split = "s",
     toggle_stack = "T",
     focus_files = "f",
+    focus_git = "g",
     focus_threads = "t",
     notes_list = "N",
     suggestion = "S",
@@ -111,7 +112,7 @@ function M._open_with_ref(ref, opts)
   state.create("local", ref or "HEAD", files, {
     repo_root = git.root(),
     branch = git.current_branch() or "HEAD",
-    requested_ref = opts.requested_ref or ref,
+    requested_ref = opts.requested_ref,
     untracked_files = untracked_files,
   })
 
@@ -233,6 +234,46 @@ function M.reopen_session()
   end
   local requested_ref = s.requested_ref
   M.open(requested_ref and { requested_ref } or {})
+end
+
+---@return boolean
+function M.refresh_local_session()
+  local state = require("review.state")
+  local s = state.get()
+  if not s or s.mode ~= "local" then
+    return false
+  end
+
+  local git = require("review.git")
+  local diff_mod = require("review.diff")
+
+  git.invalidate_cache()
+
+  local diff_ref = s.requested_ref
+  if diff_ref == nil and s.base_ref ~= "HEAD" then
+    diff_ref = s.base_ref
+  end
+
+  local diff_text = git.diff(diff_ref)
+  s.files = diff_mod.parse(diff_text)
+  s.untracked_files = git.untracked_files()
+  s.repo_root = git.root()
+  s.branch = git.current_branch() or "HEAD"
+  s.commits = diff_ref and git.log(diff_ref) or {}
+
+  if s.current_commit_idx and not s.commits[s.current_commit_idx] then
+    s.current_commit_idx = nil
+    s.scope_mode = "all"
+  end
+
+  local active_files = state.active_files()
+  if #active_files == 0 then
+    s.current_file_idx = 1
+  else
+    s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
+  end
+
+  return true
 end
 
 --- Fetch (or re-fetch) remote PR comments and refresh the UI.

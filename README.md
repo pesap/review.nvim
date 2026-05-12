@@ -7,11 +7,11 @@ Minimal code review plugin for Neovim.
 ## What it does
 
 - Dual-panel layout (file explorer + diff viewer) in its own tab
+- Embedded Fugitive status pane for worktree reviews
 - Unified and side-by-side split views
 - Word-level diff highlighting
 - Explicit review scope modes: `All`, `Current Commit`, and `Select Commit`
 - Commit navigation with per-commit file and thread filtering
-- Untracked files surfaced in the rail while reviewing the full branch
 - Inline notes on any diff line or visual selection
 - Suggestion notes with GitHub-compatible `suggestion` blocks
 - Notes list panel with draft/staged/published workflow
@@ -29,6 +29,7 @@ Minimal code review plugin for Neovim.
 
 - Neovim >= 0.9.0
 - `git`
+- `vim-fugitive` (https://github.com/tpope/vim-fugitive) for the embedded git status pane
 - `gh` CLI (https://cli.github.com) for GitHub PR features
 - `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
 - `plenary.nvim` for tests
@@ -42,6 +43,7 @@ lazy.nvim:
 ```lua
 {
   "pesap/review.nvim",
+  dependencies = { "tpope/vim-fugitive" },
   config = function()
     require("review").setup()
   end,
@@ -51,7 +53,7 @@ lazy.nvim:
 ## Usage
 
 ```vim
-:Review              " unstaged changes
+:Review              " local review (default branch when available, otherwise HEAD/worktree)
 :Review HEAD~3       " diff against a ref (shows commits)
 :Review main         " diff against main
 :ReviewToggle        " open/close
@@ -105,6 +107,7 @@ require("review").setup({
     toggle_split = "s",
     toggle_stack = "T",
     focus_files = "f",
+    focus_git = "g",
     focus_threads = "t",
     notes_list = "N",
     suggestion = "S",
@@ -132,7 +135,16 @@ The left rail shows the active `Scope` explicitly:
 - `current · <sha>` for the current commit
 - `select · <sha>` while browsing commits directly from the rail
 
-In `all` scope the `Files` section can include an `Untracked` subsection, and stale notes/threads are surfaced under `Stale` instead of silently disappearing.
+In local worktree reviews opened without an explicit ref, review.nvim embeds a
+Fugitive status pane below the explorer in the left rail. Press `g` to jump to
+it. That pane uses
+your normal Fugitive keymaps and actions, but inherits review.nvim's window
+theme so it feels like part of the same layout.
+
+If Fugitive is not installed, review.nvim shows a small themed placeholder pane
+instead of failing the whole review UI.
+
+Stale notes/threads are surfaced under `Stale` instead of silently disappearing.
 
 Diff viewer:
 
@@ -150,8 +162,16 @@ Diff viewer:
 | `s`         | toggle split                       |
 | `T`         | cycle `All` -> `Current Commit` -> `Select Commit` |
 | `f`         | focus the Files section            |
+| `g`         | focus the Fugitive pane            |
 | `t`         | focus the Threads section          |
 | `q`         | close full review                  |
+
+Fugitive pane:
+
+- `-` stage or unstage the entry under the cursor
+- `cc` create a commit
+- `A` stage all changes
+- `q` closes the full review layout through review.nvim
 
 Commands:
 

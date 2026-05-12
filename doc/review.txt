@@ -20,11 +20,11 @@ dual-panel layout for reviewing git diffs with inline notes.
 
 Features:
 - Dual-panel layout: file explorer + diff viewer
+- Embedded Fugitive status pane for worktree reviews
 - Unified and side-by-side split diff views
 - Word-level diff highlighting
 - Explicit review scopes: All, Current Commit, and Select Commit
 - Commit-level navigation with per-commit file and thread filtering
-- Untracked files in the explorer while reviewing the full branch
 - Inline notes on diff lines (normal and visual range selection)
 - Suggestion notes with GitHub-compatible `suggestion` blocks
 - Notes list panel with draft/staged/published workflow
@@ -40,6 +40,8 @@ Features:
 
 - Neovim >= 0.9.0
 - git
+- vim-fugitive (https://github.com/tpope/vim-fugitive) — for the embedded
+  git status pane
 - gh CLI (https://cli.github.com/) — for GitHub PR features
 - glab CLI (https://gitlab.com/gitlab-org/cli) — for GitLab MR features
 - plenary.nvim — for running tests
@@ -66,7 +68,8 @@ You can also set up a keymap to toggle the review panel: >lua
 :Review [ref]           Open a diff review. If {ref} is given, diffs the
                         working tree against that ref (e.g. `HEAD~3`,
                         `main`, a commit SHA). If no ref is given, shows
-                        unstaged changes.
+                        a local review against the default branch when
+                        available, otherwise against `HEAD`/the working tree.
 
                         When diffing against a ref that has multiple commits
                         in the range, the commit list is shown in the
@@ -142,6 +145,7 @@ Explorer panel:~
     ?           Open review help.
     T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section.
+    g           Focus the Fugitive status pane.
     t           Focus the Threads section.
     q           Close the full review layout.
 
@@ -163,7 +167,15 @@ Diff viewer:~
     s           Toggle between unified and side-by-side split view.
     T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section in the explorer.
+    g           Focus the Fugitive status pane.
     t           Focus the Threads section in the explorer.
+    q           Close the full review layout.
+
+Fugitive pane:~
+
+    -           Stage or unstage the entry under the cursor.
+    cc          Create a commit.
+    A           Stage all changes.
     q           Close the full review layout.
 
 Notes list (N):~
@@ -217,10 +229,11 @@ Each note is assigned an auto-incrementing ID visible in the notes list
 Explorer threads~
 
 The explorer keeps `Files` and `Threads` separate and shows the active
-`Scope` explicitly. In `all` scope, `Files` can include an `Untracked`
-subsection. Remote threads and local notes are grouped under source labels
-such as `github/`, `gitlab/`, and `local/`, and selecting a thread entry
-jumps to the related diff location.
+`Scope` explicitly. In local worktree reviews opened without an explicit
+ref, review.nvim embeds a Fugitive status pane below the explorer in the
+left rail. Press `g` to jump to it. Remote threads and local notes are
+grouped under source labels such as `github/`, `gitlab/`, and `local/`,
+and selecting a thread entry jumps to the related diff location.
 
 If notes or remote threads no longer match the active review context, they
 move to a separate `Stale` section instead of silently disappearing. This
@@ -268,6 +281,7 @@ Default configuration: >lua
         toggle_split = "s",
         toggle_stack = "T",
         focus_files = "f",
+        focus_git = "g",
         focus_threads = "t",
         notes_list = "N",
         suggestion = "S",
