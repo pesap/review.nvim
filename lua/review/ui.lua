@@ -55,6 +55,40 @@ local HL = {
   local_group = "ReviewLocalGroup",
 }
 
+---@param opts table|nil
+---@param success_msg string
+local function copy_review_export(opts, success_msg)
+  local review = package.loaded["review"] or require("review")
+  if type(review.export_content) ~= "function" then
+    package.loaded["review"] = nil
+    review = require("review")
+  end
+
+  if type(review.export_content) ~= "function" then
+    vim.notify("Could not load review.nvim clipboard exporter", vim.log.levels.ERROR)
+    return
+  end
+
+  local content, err = review.export_content(opts or {})
+  if not content then
+    vim.notify(err, err == "No active review session" and vim.log.levels.ERROR or vim.log.levels.INFO)
+    return
+  end
+
+  vim.fn.setreg('"', content)
+  local copied = {}
+  local ok_plus = pcall(vim.fn.setreg, "+", content)
+  if ok_plus then
+    table.insert(copied, "+")
+  end
+  local ok_star = pcall(vim.fn.setreg, "*", content)
+  if ok_star then
+    table.insert(copied, "*")
+  end
+  local target = #copied == 0 and [["]] or table.concat(copied, ", ")
+  vim.notify(success_msg .. target, vim.log.levels.INFO)
+end
+
 --- Set up highlight groups (called once).
 ---@param colorblind boolean
 function M.setup_highlights(colorblind)
@@ -2111,6 +2145,12 @@ setup_diff_keymaps = function(buf)
     M.jump_to_note(1)
   end, opts)
 
+  if km.next_note_short then
+    vim.keymap.set("n", km.next_note_short, function()
+      M.jump_to_note(1)
+    end, opts)
+  end
+
   vim.keymap.set("n", km.prev_note, function()
     M.jump_to_note(-1)
   end, opts)
@@ -2199,7 +2239,7 @@ function M.open()
   end
 
   vim.cmd("tabnew")
-  pcall(vim.cmd, "file " .. tab_name)
+  pcall(vim.cmd, "file " .. vim.fn.fnameescape(tab_name))
   local tab = vim.api.nvim_get_current_tabpage()
 
   local explorer_buf = create_buf("review://explorer", { filetype = "review-explorer" })
@@ -2281,31 +2321,42 @@ end
 
 --- Close the review layout.
 function M.close()
-  review_closing = false
-  clear_inline_preview()
+  if review_closing then
+    return
+  end
+  review_closing = true
 
-  local ui = state.get_ui()
-  if ui and ui.tab then
-    local tabs = vim.api.nvim_list_tabpages()
-    if #tabs <= 1 then
-      for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
-        if buf and vim.api.nvim_buf_is_valid(buf) then
-          vim.api.nvim_buf_delete(buf, { force = true })
-        end
-      end
-    else
-      for _, t in ipairs(tabs) do
-        if t == ui.tab then
-          if vim.api.nvim_get_current_tabpage() == ui.tab then
-            vim.cmd("tabprevious")
+  local ok, err = pcall(function()
+    clear_inline_preview()
+
+    local ui = state.get_ui()
+    if ui and ui.tab then
+      local tabs = vim.api.nvim_list_tabpages()
+      if #tabs <= 1 then
+        for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
+          if buf and vim.api.nvim_buf_is_valid(buf) then
+            vim.api.nvim_buf_delete(buf, { force = true })
           end
-          vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
-          break
+        end
+      else
+        for _, t in ipairs(tabs) do
+          if t == ui.tab then
+            if vim.api.nvim_get_current_tabpage() == ui.tab then
+              vim.cmd("tabprevious")
+            end
+            vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
+            break
+          end
         end
       end
     end
+    state.destroy()
+  end)
+
+  review_closing = false
+  if not ok then
+    error(err)
   end
-  state.destroy()
 end
 
 ---@param target table
@@ -2314,6 +2365,18 @@ function M.open_note_float_for_target(target, opts)
   opts = opts or {}
   if not target or not target.file_path or not target.line then
     vim.notify("Cannot add note without a file and line", vim.log.levels.WARN)
+    return
+  end
+
+  local target_file = nil
+  for _, file in ipairs(state.active_files()) do
+    if file.path == target.file_path then
+      target_file = file
+      break
+    end
+  end
+  if not target_file then
+    vim.notify("Cannot add note outside the current review file set", vim.log.levels.WARN)
     return
   end
 
@@ -3428,11 +3491,11 @@ function M.open_notes_list()
   end, buf_opts)
 
   vim.keymap.set("n", "y", function()
-    require("review").copy_notes_to_clipboard()
+    copy_review_export({ clipboard = true }, "Notes copied to clipboard register(s): ")
   end, buf_opts)
 
   vim.keymap.set("n", "Y", function()
-    require("review").copy_local_notes_to_clipboard()
+    copy_review_export({ local_only = true }, "Local notes copied to clipboard register(s): ")
   end, buf_opts)
 
   vim.keymap.set("n", "C", function()
@@ -3635,6 +3698,9 @@ function M.open_notes_list()
   vim.keymap.set("n", "[n", function()
     jump_in_list(-1)
   end, buf_opts)
+  vim.keymap.set("n", "n", function()
+    jump_in_list(1)
+  end, buf_opts)
   vim.keymap.set("n", "j", function()
     jump_in_list(1)
   end, buf_opts)
@@ -3730,6 +3796,9 @@ function M.open_help()
   add_item(km.prev_hunk, "Previous hunk")
   add_item(km.next_file, "Next file")
   add_item(km.prev_file, "Previous file")
+  if km.next_note_short then
+    add_item(km.next_note_short, "Next note")
+  end
   add_item(km.next_note, "Next note")
   add_item(km.prev_note, "Previous note")
   add_item(km.toggle_split, "Toggle unified/split view")

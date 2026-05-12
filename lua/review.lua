@@ -28,6 +28,7 @@ local defaults = {
     prev_hunk = "[c",
     next_file = "]f",
     prev_file = "[f",
+    next_note_short = "n",
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",
@@ -655,12 +656,12 @@ local function parse_note_target(raw)
     return nil
   end
 
-  local file_path, line, side = raw:match("^(.-):(%d+):(old)$")
+  local file_path, line, side = raw:match("^(.*):(%d+):(old)$")
   if not file_path then
-    file_path, line, side = raw:match("^(.-):(%d+):(new)$")
+    file_path, line, side = raw:match("^(.*):(%d+):(new)$")
   end
   if not file_path then
-    file_path, line = raw:match("^(.-):(%d+)$")
+    file_path, line = raw:match("^(.*):(%d+)$")
   end
   if file_path and line then
     return {

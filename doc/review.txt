@@ -132,10 +132,12 @@ All keymaps are buffer-local to the review buffers and configurable via
 
 Explorer panel:~
 
-    <CR>        Select a commit or file under the cursor. Selecting a
-                commit filters the file list to that commit's changes.
-                Selecting "All changes" shows the full diff.
+    <CR>        Open the file or thread under the cursor. Thread entries
+                jump to the related diff location.
     ?           Open review help.
+    T           Cycle between full stack view and per-commit filtering.
+    f           Focus the Files section.
+    t           Focus the Threads section.
     q           Close the full review layout.
 
 Diff viewer:~
@@ -151,7 +153,7 @@ Diff viewer:~
     [c          Jump to the previous hunk.
     ]f          Jump to the next file.
     [f          Jump to the previous file.
-    ]n          Jump to the next note (across files).
+    n / ]n      Jump to the next note (across files).
     [n          Jump to the previous note (across files).
     s           Toggle between unified and side-by-side split view.
     T           Cycle between full stack view and per-commit filtering.
@@ -162,7 +164,7 @@ Diff viewer:~
 Notes list (N):~
                                                          *review-notes-list*
 
-    j / ]n      Jump to next note entry.
+    j / n / ]n  Jump to next note entry.
     k / [n      Jump to previous note entry.
     <CR>        Jump to the note in the diff view.
     dd          Delete the note.
@@ -243,6 +245,7 @@ Default configuration: >lua
         prev_hunk = "[c",
         next_file = "]f",
         prev_file = "[f",
+        next_note_short = "n",
         next_note = "]n",
         prev_note = "[n",
         toggle_split = "s",

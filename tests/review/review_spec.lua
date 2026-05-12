@@ -219,4 +219,15 @@ describe("review note targets", function()
       side = "new",
     }, target)
   end)
+
+  it("parses windows-style path targets by matching from the end", function()
+    local target, err = review.resolve_note_target({ [[C:\work\review.lua:33:old]] })
+
+    assert.is_nil(err)
+    assert.are.same({
+      file_path = [[C:\work\review.lua]],
+      line = 33,
+      side = "old",
+    }, target)
+  end)
 end)

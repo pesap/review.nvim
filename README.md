@@ -96,6 +96,7 @@ require("review").setup({
     prev_hunk = "[c",
     next_file = "]f",
     prev_file = "[f",
+    next_note_short = "n",
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",
@@ -135,7 +136,7 @@ Diff viewer:
 | `?`         | help                               |
 | `]c` / `[c` | next/prev hunk                     |
 | `]f` / `[f` | next/prev file                     |
-| `]n` / `[n` | next/prev note                     |
+| `n`, `]n` / `[n` | next/prev note                 |
 | `s`         | toggle split                       |
 | `T`         | cycle stack/commit scope           |
 | `f`         | focus the Files section            |
