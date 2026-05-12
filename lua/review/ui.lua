@@ -2233,7 +2233,7 @@ function M.open()
   end
 
   vim.cmd("tabnew")
-  pcall(vim.cmd, "file " .. tab_name)
+  pcall(vim.cmd, "file " .. vim.fn.fnameescape(tab_name))
   local tab = vim.api.nvim_get_current_tabpage()
 
   local explorer_buf = create_buf("review://explorer", { filetype = "review-explorer" })
@@ -2315,31 +2315,42 @@ end
 
 --- Close the review layout.
 function M.close()
-  review_closing = false
-  clear_inline_preview()
+  if review_closing then
+    return
+  end
+  review_closing = true
 
-  local ui = state.get_ui()
-  if ui and ui.tab then
-    local tabs = vim.api.nvim_list_tabpages()
-    if #tabs <= 1 then
-      for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
-        if buf and vim.api.nvim_buf_is_valid(buf) then
-          vim.api.nvim_buf_delete(buf, { force = true })
-        end
-      end
-    else
-      for _, t in ipairs(tabs) do
-        if t == ui.tab then
-          if vim.api.nvim_get_current_tabpage() == ui.tab then
-            vim.cmd("tabprevious")
+  local ok, err = pcall(function()
+    clear_inline_preview()
+
+    local ui = state.get_ui()
+    if ui and ui.tab then
+      local tabs = vim.api.nvim_list_tabpages()
+      if #tabs <= 1 then
+        for _, buf in ipairs({ ui.explorer_buf, ui.diff_buf, ui.split_buf }) do
+          if buf and vim.api.nvim_buf_is_valid(buf) then
+            vim.api.nvim_buf_delete(buf, { force = true })
           end
-          vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
-          break
+        end
+      else
+        for _, t in ipairs(tabs) do
+          if t == ui.tab then
+            if vim.api.nvim_get_current_tabpage() == ui.tab then
+              vim.cmd("tabprevious")
+            end
+            vim.cmd("tabclose " .. vim.api.nvim_tabpage_get_number(ui.tab))
+            break
+          end
         end
       end
     end
+    state.destroy()
+  end)
+
+  review_closing = false
+  if not ok then
+    error(err)
   end
-  state.destroy()
 end
 
 ---@param target table
@@ -2348,6 +2359,18 @@ function M.open_note_float_for_target(target, opts)
   opts = opts or {}
   if not target or not target.file_path or not target.line then
     vim.notify("Cannot add note without a file and line", vim.log.levels.WARN)
+    return
+  end
+
+  local target_file = nil
+  for _, file in ipairs(state.active_files()) do
+    if file.path == target.file_path then
+      target_file = file
+      break
+    end
+  end
+  if not target_file then
+    vim.notify("Cannot add note outside the current review file set", vim.log.levels.WARN)
     return
   end
 

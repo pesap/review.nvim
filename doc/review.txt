@@ -132,10 +132,12 @@ All keymaps are buffer-local to the review buffers and configurable via
 
 Explorer panel:~
 
-    <CR>        Select a commit or file under the cursor. Selecting a
-                commit filters the file list to that commit's changes.
-                Selecting "All changes" shows the full diff.
+    <CR>        Open the file or thread under the cursor. Thread entries
+                jump to the related diff location.
     ?           Open review help.
+    T           Cycle between full stack view and per-commit filtering.
+    f           Focus the Files section.
+    t           Focus the Threads section.
     q           Close the full review layout.
 
 Diff viewer:~
