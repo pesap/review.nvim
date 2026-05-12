@@ -28,6 +28,7 @@ local defaults = {
     prev_hunk = "[c",
     next_file = "]f",
     prev_file = "[f",
+    next_note_short = "n",
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",

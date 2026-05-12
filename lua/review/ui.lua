@@ -2145,6 +2145,12 @@ setup_diff_keymaps = function(buf)
     M.jump_to_note(1)
   end, opts)
 
+  if km.next_note_short then
+    vim.keymap.set("n", km.next_note_short, function()
+      M.jump_to_note(1)
+    end, opts)
+  end
+
   vim.keymap.set("n", km.prev_note, function()
     M.jump_to_note(-1)
   end, opts)
@@ -3692,6 +3698,9 @@ function M.open_notes_list()
   vim.keymap.set("n", "[n", function()
     jump_in_list(-1)
   end, buf_opts)
+  vim.keymap.set("n", "n", function()
+    jump_in_list(1)
+  end, buf_opts)
   vim.keymap.set("n", "j", function()
     jump_in_list(1)
   end, buf_opts)
@@ -3787,6 +3796,9 @@ function M.open_help()
   add_item(km.prev_hunk, "Previous hunk")
   add_item(km.next_file, "Next file")
   add_item(km.prev_file, "Previous file")
+  if km.next_note_short then
+    add_item(km.next_note_short, "Next note")
+  end
   add_item(km.next_note, "Next note")
   add_item(km.prev_note, "Previous note")
   add_item(km.toggle_split, "Toggle unified/split view")
