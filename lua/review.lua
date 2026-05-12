@@ -5,10 +5,6 @@ local M = {}
 ---@class ReviewConfig
 local defaults = {
   view = "unified",
-  viewer = "native", ---@type "native"|"hunk"
-  hunk = {
-    mode = "session", ---@type "session"|"companion"
-  },
   render = {
     word_diff = {
       enabled = true,
@@ -21,7 +17,6 @@ local defaults = {
   notifications = {
     context = false,
   },
-  vcs_mode = "auto", ---@type "auto"|"git"|"gitlab"|"gitbutler"
   colorblind = true,
   provider = nil, ---@type string|nil  "github"|"gitlab"|nil (nil = auto-detect from remote URL)
   keymaps = {
@@ -62,16 +57,6 @@ local function notify(msg, level, enabled)
     return
   end
   vim.notify(msg, level)
-end
-
----@return boolean
-local function uses_hunk_session_viewer()
-  return M.config.viewer == "hunk"
-end
-
----@return boolean
-local function uses_hunk_companion()
-  return M.config.viewer ~= "hunk" and M.config.hunk and M.config.hunk.mode == "companion"
 end
 
 ---@param base_ref string|nil
@@ -135,33 +120,6 @@ function M._open_with_ref(ref, opts)
   return true
 end
 
----@param ref string|nil
----@param args string[]
----@return boolean
-local function open_hunk_review(ref, args)
-  local state = require("review.state")
-
-  if not M._open_with_ref(ref, { open_ui = false }) then
-    return false
-  end
-
-  local ok, err = require("review.hunk").open(args)
-  if not ok then
-    state.destroy()
-    if err then
-      vim.notify("Failed to open Hunk: " .. err, vim.log.levels.ERROR)
-    end
-    return false
-  end
-
-  vim.defer_fn(function()
-    if state.get() then
-      M.sync_hunk_comments()
-    end
-  end, 200)
-  return true
-end
-
 --- Open a review session.
 --- Usage:
 ---   :Review          — auto-detect: if on a branch with an open PR, review against default branch; otherwise diff against HEAD
@@ -186,15 +144,9 @@ function M.open(args)
   end
 
   local forge = require("review.forge")
-  local use_hunk = uses_hunk_session_viewer()
 
   if #args > 0 then
-    local ref = args[1]
-    if use_hunk then
-      open_hunk_review(ref, args)
-    else
-      M._open_with_ref(ref)
-    end
+    M._open_with_ref(args[1])
     return
   end
 
@@ -208,14 +160,8 @@ function M.open(args)
         vim.log.levels.INFO,
         M.config.notifications and M.config.notifications.context
       )
-      if use_hunk then
-        if not open_hunk_review(base, { base }) then
-          return
-        end
-      else
-        if not M._open_with_ref(base) then
-          return
-        end
+      if not M._open_with_ref(base) then
+        return
       end
       state.set_forge_info(cached)
       hydrate_cached_remote_bundle(base)
@@ -227,12 +173,7 @@ function M.open(args)
   -- No cache — open with default branch diff, detect PR in background
   local base = git.default_branch()
   if base then
-    local opened
-    if use_hunk then
-      opened = open_hunk_review(base, { base })
-    else
-      opened = M._open_with_ref(base)
-    end
+    local opened = M._open_with_ref(base)
     if not opened then
       return
     end
@@ -269,11 +210,7 @@ function M.open(args)
       end
     end)
   else
-    if use_hunk then
-      open_hunk_review(nil, {})
-    else
-      M._open_with_ref(nil)
-    end
+    M._open_with_ref(nil)
   end
 end
 
@@ -317,9 +254,7 @@ function M.refresh_comments()
     end
     require("review.storage").save_remote_bundle(forge_info, s.base_ref, comments or {})
 
-    local ui = require("review.ui")
-    ui.refresh()
-    M.sync_hunk_comments()
+    require("review.ui").refresh()
   end)
 end
 
@@ -710,7 +645,6 @@ function M.clear_local_notes()
   end
 
   require("review.ui").refresh()
-  M.sync_hunk_comments()
   vim.notify(cleared .. " local note(s) cleared", vim.log.levels.INFO)
 end
 
@@ -757,19 +691,13 @@ function M.resolve_note_target(args)
           file_path = args[1],
           line = line,
           side = args[3] == "old" and "old" or "new",
-        },
-          nil
+        }, nil
       end
     end
 
     return nil, "Use :ReviewComment path:line[:old|new] or :ReviewComment path line [old|new]"
   end
-
-  if uses_hunk_session_viewer() then
-    return require("review.hunk").current_target()
-  end
-
-  return nil, "ReviewComment without arguments is only available from a Hunk session"
+  return nil, "No explicit note target provided"
 end
 
 ---@param args string[]|nil
@@ -780,14 +708,14 @@ function M.add_note(args)
     return
   end
 
-  if not uses_hunk_session_viewer() then
+  if not args or #args == 0 then
     require("review.ui").open_note_float()
     return
   end
 
   local target, err = M.resolve_note_target(args)
   if not target then
-    vim.notify(err or "Could not determine Hunk cursor location", vim.log.levels.WARN)
+    vim.notify(err or "Could not determine note target", vim.log.levels.WARN)
     return
   end
 
@@ -802,58 +730,18 @@ function M.add_suggestion(args)
     return
   end
 
-  if not uses_hunk_session_viewer() then
+  if not args or #args == 0 then
     require("review.ui").open_note_float({ suggestion = true })
     return
   end
 
   local target, err = M.resolve_note_target(args)
   if not target then
-    vim.notify(err or "Could not determine Hunk cursor location", vim.log.levels.WARN)
+    vim.notify(err or "Could not determine note target", vim.log.levels.WARN)
     return
   end
 
   require("review.ui").open_note_float_for_target(target, { suggestion = true })
-end
-
-function M.sync_hunk_comments()
-  if not uses_hunk_session_viewer() and not uses_hunk_companion() then
-    return
-  end
-
-  local state = require("review.state")
-  local session = state.get()
-  if not session then
-    return
-  end
-
-  local ok, err = require("review.hunk").sync_comments(state.get_notes(), {
-    strict_session = uses_hunk_session_viewer(),
-  })
-  if not ok and err then
-    vim.notify("Failed to sync Hunk comments: " .. err, vim.log.levels.WARN)
-  end
-end
-
----@param args string[]|nil
-function M.open_hunk(args)
-  args = args or {}
-
-  if #args == 0 then
-    local state = require("review.state")
-    local s = state.get()
-    if s and s.base_ref and s.base_ref ~= "HEAD" then
-      args = { s.base_ref }
-    end
-  end
-
-  local ok, err = require("review.hunk").open(args)
-  if not ok and err then
-    vim.notify("Failed to open Hunk: " .. err, vim.log.levels.ERROR)
-    return
-  end
-
-  M.sync_hunk_comments()
 end
 
 --- Export notes to markdown (local mode).

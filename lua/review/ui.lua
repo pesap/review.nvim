@@ -21,7 +21,7 @@ local HL = {
   del_text = "ReviewDiffDeleteText",
   diff_gutter = "ReviewDiffGutter",
   diff_context = "ReviewDiffContext",
-  hunk_header = "ReviewHunkHeader",
+  meta = "ReviewMeta",
   file_header = "ReviewFileHeader",
   panel_title = "ReviewPanelTitle",
   panel_meta = "ReviewPanelMeta",
@@ -86,7 +86,7 @@ function M.setup_highlights(colorblind)
   set(0, HL.focus, { fg = colorblind and "#ebcb8b" or "#e5c07b", bold = true })
   set(0, HL.diff_gutter, { fg = "#5c6370" })
   set(0, HL.diff_context, { fg = "#9aa3b2" })
-  set(0, HL.hunk_header, { fg = "#888888", italic = true })
+  set(0, HL.meta, { fg = "#888888", italic = true })
   set(0, HL.file_header, { fg = colorblind and "#d8dee9" or "#61afef", bold = true })
   set(0, HL.panel_title, { fg = colorblind and "#ebcb8b" or "#e5c07b", bold = true })
   set(0, HL.panel_meta, { fg = "#7f848e" })
@@ -1542,7 +1542,7 @@ local function show_inline_preview(buf, display_line, note)
   for i, reply in ipairs(note.replies) do
     if i > max_replies then
       table.insert(vlines, {
-        { string.format("  \u{2502} ... and %d more", #note.replies - max_replies), HL.hunk_header },
+        { string.format("  \u{2502} ... and %d more", #note.replies - max_replies), HL.meta },
       })
       break
     end
@@ -1557,7 +1557,7 @@ local function show_inline_preview(buf, display_line, note)
   local status = note.resolved and "resolved" or "open"
   local reply_count = #note.replies
   local footer = string.format("  \u{2514} %s \u{00B7} %d replies \u{00B7} <CR> open thread", status, reply_count)
-  table.insert(vlines, { { footer, HL.hunk_header } })
+  table.insert(vlines, { { footer, HL.meta } })
 
   vim.api.nvim_buf_set_extmark(buf, inline_ns, display_line - 1, 0, {
     virt_lines = vlines,
@@ -2390,7 +2390,6 @@ function M.open_note_float_for_target(target, opts)
       end
     end
     M.refresh()
-    require("review").sync_hunk_comments()
   end, function()
     vim.api.nvim_win_close(note_win, true)
   end)
@@ -2500,7 +2499,6 @@ function M.edit_note_at_cursor()
     local lines = vim.api.nvim_buf_get_lines(note_buf, 0, -1, false)
     state.update_note_body(note_idx, table.concat(lines, "\n"))
     M.refresh()
-    require("review").sync_hunk_comments()
   end, function()
     vim.api.nvim_win_close(note_win, true)
   end)
@@ -2537,7 +2535,6 @@ function M.delete_note_at_cursor()
   state.remove_note(note_idx)
   vim.notify("Note deleted", vim.log.levels.INFO)
   M.refresh()
-  require("review").sync_hunk_comments()
 end
 
 --- Resolve a note to a display line in a file's diff.
@@ -2729,7 +2726,7 @@ function M.open_thread_view(note)
     }, width))
   do
     table.insert(lines, legend_line)
-    highlight_rows[#lines] = { hl = HL.hunk_header }
+    highlight_rows[#lines] = { hl = HL.meta }
   end
 
   local height = math.min(#lines, math.floor(vim.o.lines * 0.75))
@@ -3201,7 +3198,7 @@ function M.open_notes_list()
 
     if #meta > 0 then
       local meta_byte_start = #display - #meta
-      table.insert(extra_hls, { #lines, HL.hunk_header, meta_byte_start, #display })
+      table.insert(extra_hls, { #lines, HL.meta, meta_byte_start, #display })
     end
   end
 
@@ -3249,7 +3246,7 @@ function M.open_notes_list()
     }, width))
   do
     table.insert(lines, legend_line)
-    highlight_rows[#lines] = { hl = HL.hunk_header }
+    highlight_rows[#lines] = { hl = HL.meta }
     note_refs[#lines] = false
   end
 
@@ -3360,7 +3357,6 @@ function M.open_notes_list()
     vim.api.nvim_win_close(list_win, true)
     M.open_notes_list()
     M.refresh()
-    require("review").sync_hunk_comments()
   end, buf_opts)
 
   vim.keymap.set("n", "P", function()
@@ -3389,7 +3385,6 @@ function M.open_notes_list()
       vim.api.nvim_win_close(list_win, true)
       M.open_notes_list()
       M.refresh()
-      require("review").sync_hunk_comments()
       return
     end
 
@@ -3461,7 +3456,6 @@ function M.open_notes_list()
       vim.notify(cleared .. " local note(s) cleared", vim.log.levels.INFO)
       vim.api.nvim_win_close(list_win, true)
       M.refresh()
-      require("review").sync_hunk_comments()
       if #state.get_notes() > 0 then
         M.open_notes_list()
       end
@@ -3526,20 +3520,6 @@ function M.open_notes_list()
 
     vim.api.nvim_win_close(list_win, true)
 
-    if require("review").config.viewer == "hunk" then
-      local ok, err = require("review.hunk").navigate(target_path, target_line, target_side)
-      if not ok and err then
-        vim.notify("Could not navigate Hunk session: " .. err, vim.log.levels.WARN)
-      end
-      if is_remote and remote_note_id then
-        local note_obj = state.get_note_by_id(remote_note_id)
-        if note_obj then
-          M.open_thread_view(note_obj)
-        end
-      end
-      return
-    end
-
     vim.schedule(function()
       local sess = state.get()
       if sess and sess.current_commit_idx then
@@ -3601,7 +3581,6 @@ function M.open_notes_list()
     vim.api.nvim_win_close(list_win, true)
     M.open_notes_list()
     M.refresh()
-    require("review").sync_hunk_comments()
   end, buf_opts)
 
   vim.keymap.set("n", "b", function()
@@ -3729,7 +3708,6 @@ function M.open_help()
   add_item(":ReviewClipboardLocal", "Copy only local notes to the clipboard")
   add_item(":ReviewClearLocal", "Clear all local notes after confirmation")
   add_item(":ReviewRefresh", "Refresh remote PR/MR comments")
-  add_item(":ReviewHunk [ref]", "Open or reload Hunk")
   add_item(":ReviewComment", "Add a note")
   add_item(":ReviewSuggestion", "Add a suggestion")
   add_item(":ReviewExport [path]", "Export notes to markdown")

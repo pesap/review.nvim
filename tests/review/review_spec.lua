@@ -182,3 +182,41 @@ describe("review note export and clearing", function()
     assert.are.equal("remote", state.get_notes()[1].status)
   end)
 end)
+
+describe("review note targets", function()
+  local review
+  local original_review_module
+
+  before_each(function()
+    original_review_module = package.loaded["review"]
+    package.loaded["review"] = nil
+    review = require("review")
+    review.setup({})
+  end)
+
+  after_each(function()
+    package.loaded["review"] = original_review_module
+  end)
+
+  it("parses path:line[:side] notation", function()
+    local target, err = review.resolve_note_target({ "README.md:33:old" })
+
+    assert.is_nil(err)
+    assert.are.same({
+      file_path = "README.md",
+      line = 33,
+      side = "old",
+    }, target)
+  end)
+
+  it("parses positional path line side arguments", function()
+    local target, err = review.resolve_note_target({ "lua/review.lua", "21", "new" })
+
+    assert.is_nil(err)
+    assert.are.same({
+      file_path = "lua/review.lua",
+      line = 21,
+      side = "new",
+    }, target)
+  end)
+end)

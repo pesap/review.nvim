@@ -6,7 +6,6 @@
 :ReviewClipboardLocal	review.txt	/*:ReviewClipboardLocal*
 :ReviewExport	review.txt	/*:ReviewExport*
 :ReviewHelp	review.txt	/*:ReviewHelp*
-:ReviewHunk	review.txt	/*:ReviewHunk*
 :ReviewNotes	review.txt	/*:ReviewNotes*
 :ReviewSuggestion	review.txt	/*:ReviewSuggestion*
 :ReviewSubmit	review.txt	/*:ReviewSubmit*

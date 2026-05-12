@@ -50,19 +50,6 @@ function M.check()
     forge == "gitlab"
   )
 
-  local config = require("review").config or {}
-  if config.viewer == "hunk" or (config.hunk and config.hunk.mode == "companion") then
-    if vim.fn.executable("hunk") == 1 then
-      vim.health.ok("hunk CLI is installed")
-    else
-      if config.viewer == "hunk" then
-        vim.health.error("hunk CLI is not installed", { "Install: npm i -g hunkdiff" })
-      else
-        vim.health.warn("hunk CLI is not installed", { "Install: npm i -g hunkdiff" })
-      end
-    end
-  end
-
   if git.root() then
     vim.health.ok("Current directory is a git repository")
     if remote then
