@@ -100,12 +100,20 @@ function M._open_with_ref(ref, opts)
   end
 
   local files = diff_mod.parse(diff_text)
+  local untracked_files = git.untracked_files()
   if #files == 0 then
-    vim.notify("No files changed", vim.log.levels.INFO)
-    return false
+    if #untracked_files == 0 then
+      vim.notify("No files changed", vim.log.levels.INFO)
+      return false
+    end
   end
 
-  state.create("local", ref or "HEAD", files)
+  state.create("local", ref or "HEAD", files, {
+    repo_root = git.root(),
+    branch = git.current_branch() or "HEAD",
+    requested_ref = opts.requested_ref or ref,
+    untracked_files = untracked_files,
+  })
 
   if ref then
     local commits = git.log(ref)
@@ -133,6 +141,8 @@ function M.open(args)
   local state = require("review.state")
   local ui = require("review.ui")
 
+  git.invalidate_cache()
+
   -- Close any existing session
   if state.get() then
     ui.close()
@@ -147,7 +157,7 @@ function M.open(args)
   local forge = require("review.forge")
 
   if #args > 0 then
-    M._open_with_ref(args[1])
+    M._open_with_ref(args[1], { requested_ref = args[1] })
     return
   end
 
@@ -161,7 +171,7 @@ function M.open(args)
         vim.log.levels.INFO,
         M.config.notifications and M.config.notifications.context
       )
-      if not M._open_with_ref(base) then
+      if not M._open_with_ref(base, { requested_ref = nil }) then
         return
       end
       state.set_forge_info(cached)
@@ -174,7 +184,7 @@ function M.open(args)
   -- No cache — open with default branch diff, detect PR in background
   local base = git.default_branch()
   if base then
-    local opened = M._open_with_ref(base)
+    local opened = M._open_with_ref(base, { requested_ref = nil })
     if not opened then
       return
     end
@@ -211,8 +221,18 @@ function M.open(args)
       end
     end)
   else
-    M._open_with_ref(nil)
+    M._open_with_ref(nil, { requested_ref = nil })
   end
+end
+
+function M.reopen_session()
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    return
+  end
+  local requested_ref = s.requested_ref
+  M.open(requested_ref and { requested_ref } or {})
 end
 
 --- Fetch (or re-fetch) remote PR comments and refresh the UI.
@@ -231,6 +251,12 @@ function M.refresh_comments()
   end
 
   local forge = require("review.forge")
+  local git = require("review.git")
+  git.invalidate_cache()
+  if not state.session_matches_git() then
+    M.reopen_session()
+    return
+  end
   state.set_comments_loading(true)
   require("review.ui").refresh()
 
@@ -244,11 +270,13 @@ function M.refresh_comments()
     state.set_comments_loading(false)
 
     if fetch_err then
+      state.set_remote_context_stale(fetch_err)
       vim.notify("Could not load PR comments: " .. fetch_err, vim.log.levels.WARN)
       require("review.ui").refresh()
       return
     end
 
+    state.set_remote_context_stale(nil)
     state.clear_remote_comments()
     if comments and #comments > 0 then
       state.load_remote_comments(comments)

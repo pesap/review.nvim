@@ -46,6 +46,10 @@ describe("review.ui explorer rail", function()
         return {}
       end,
       save = function() end,
+      load_remote_bundle = function()
+        return nil
+      end,
+      save_remote_bundle = function() end,
     }
     package.loaded["review.state"] = nil
     package.loaded["review.ui"] = nil
@@ -113,9 +117,10 @@ describe("review.ui explorer rail", function()
 
     assert.are.equal(" feature/rail-polish", lines[1])
     assert.are.equal(" against main", lines[2])
-    assert.are.equal(" Files  +3  -3", lines[3])
+    assert.are.equal(" Scope  all", lines[3])
+    assert.are.equal(" Files  +3  -3", lines[4])
     assert.are.equal("no", vim.wo[state.get_ui().explorer_win].signcolumn)
-    assert.is_true(lines[4]:match("^  M [^…].*….*lua$") ~= nil)
+    assert.is_true(lines[5]:match("^  M [^…].*….*lua$") ~= nil)
     assert.is_true(vim.tbl_contains(lines, " Threads"))
     assert.is_true(vim.tbl_contains(lines, "   github/"))
     assert.is_true(vim.tbl_contains(lines, "   local/"))
@@ -197,9 +202,9 @@ describe("review.ui explorer rail", function()
     local del_mark
     for _, mark in ipairs(marks) do
       groups[mark[4].hl_group] = true
-      if mark[2] == 2 and mark[4].hl_group == "ReviewStatusADim" then
+      if mark[2] == 3 and mark[4].hl_group == "ReviewStatusADim" then
         add_mark = mark
-      elseif mark[2] == 2 and mark[4].hl_group == "ReviewStatusDDim" then
+      elseif mark[2] == 3 and mark[4].hl_group == "ReviewStatusDDim" then
         del_mark = mark
       end
     end
@@ -256,6 +261,106 @@ describe("review.ui explorer rail", function()
     assert.is_true(vim.fn.strdisplaywidth(lines[1]) <= 28)
 
     vim.o.columns = original_columns
+  end)
+
+  it("shows untracked files only in all scope and exposes stale notes separately", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      repo_root = git.root(),
+      branch = "feature/rail-polish",
+      requested_ref = nil,
+      untracked_files = {
+        { path = "lua/scratch.lua", status = "?", untracked = true, hunks = { sample_hunk(1, 1) } },
+      },
+    })
+    state.add_note("lua/missing.lua", 3, "stale", nil, "new")
+    local stale = state.get_notes("lua/missing.lua")[1]
+    stale.commit_sha = "deadbeef"
+    stale.commit_short_sha = "deadbee"
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Untracked"))
+    assert.is_true(vim.tbl_contains(lines, "  ? scratch.lua") or vim.tbl_contains(lines, "  ? scrat….lua"))
+    assert.is_true(vim.tbl_contains(lines, " Stale"))
+    assert.is_true(vim.tbl_contains(lines, "   local/"))
+    assert.is_true(
+      vim.tbl_contains(lines, "     missing.lua [1]")
+        or vim.tbl_contains(lines, "     missing.lua [1] @deadbee")
+        or vim.tbl_contains(lines, "     miss…lua [1] @deadbee")
+    )
+
+    state.set_commits({
+      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
+        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      } },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+    ui.refresh()
+
+    lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    assert.is_false(vim.tbl_contains(lines, " Untracked"))
+  end)
+
+  it("shows stale remote threads when forge context becomes outdated", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      repo_root = git.root(),
+      branch = "feature/rail-polish",
+      requested_ref = nil,
+      untracked_files = {},
+    })
+    state.set_forge_info({ forge = "github", pr_number = 7 })
+    state.load_remote_comments({
+      {
+        file_path = "lua/review.lua",
+        line = 2,
+        side = "new",
+        replies = {
+          { body = "remote one", author = "octocat" },
+        },
+        resolved = false,
+      },
+    })
+    state.set_remote_context_stale("PR is closed")
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Stale"))
+    assert.is_true(vim.tbl_contains(lines, "   github/"))
+    assert.is_true(vim.tbl_contains(lines, "     revi…lua [1]") or vim.tbl_contains(lines, "     review.lua [1]"))
+  end)
+
+  it("reopens the session when the git branch changes under the active UI", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/rail-polish",
+      requested_ref = nil,
+      untracked_files = {},
+    })
+
+    ui.open()
+
+    local called = false
+    local original_reopen = review.reopen_session
+    review.reopen_session = function()
+      called = true
+    end
+    git.current_branch = function()
+      return "feature/changed-branch"
+    end
+
+    ui.refresh()
+
+    review.reopen_session = original_reopen
+    assert.is_true(called)
   end)
 end)
 

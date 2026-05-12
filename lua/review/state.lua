@@ -66,11 +66,17 @@ end
 
 ---@class ReviewSession
 ---@field mode "local"|"pr"
+---@field repo_root string|nil
+---@field branch string|nil
+---@field requested_ref string|nil
 ---@field base_ref string
 ---@field files ReviewFile[]             All files (full diff)
+---@field untracked_files ReviewFile[]   Untracked working tree files
 ---@field commits ReviewCommit[]         Commits in the range
+---@field scope_mode "all"|"current_commit"|"select_commit"
 ---@field current_commit_idx number|nil  nil = all changes, number = specific commit
 ---@field current_file_idx number
+---@field remote_context_stale string|nil
 ---@field pr ReviewPR|nil
 ---@field provider ReviewProvider|nil
 ---@field notes ReviewNote[]
@@ -89,7 +95,8 @@ end
 
 ---@class ReviewFile
 ---@field path string
----@field status string  "M"|"A"|"D"|"R"
+---@field status string  "M"|"A"|"D"|"R"|"?"
+---@field untracked boolean|nil
 ---@field hunks ReviewHunk[]
 
 ---@class ReviewHunk
@@ -116,6 +123,8 @@ end
 ---@field body string
 ---@field note_type string  "comment"|"suggestion"
 ---@field status string  "draft"|"staged"|"remote"
+---@field commit_sha string|nil
+---@field commit_short_sha string|nil
 ---@field url string|nil  Link to the published comment (e.g. GitHub PR comment URL)
 ---@field author string|nil  Author of a remote comment
 ---@field replies ReviewReply[]|nil  Thread replies (remote comments only)
@@ -154,15 +163,24 @@ end
 ---@param mode "local"|"pr"
 ---@param base_ref string
 ---@param files ReviewFile[]
+---@param opts table|nil
 ---@return ReviewSession
-function M.create(mode, base_ref, files)
+function M.create(mode, base_ref, files, opts)
+  opts = opts or {}
+  local git = require("review.git")
   session = {
     mode = mode,
+    repo_root = opts.repo_root or git.root(),
+    branch = opts.branch or git.current_branch() or "HEAD",
+    requested_ref = opts.requested_ref,
     base_ref = base_ref,
     files = files,
+    untracked_files = opts.untracked_files or {},
     commits = {},
+    scope_mode = "all",
     current_commit_idx = nil, -- nil = all changes
     current_file_idx = 1,
+    remote_context_stale = nil,
     pr = nil,
     provider = nil,
     notes = {},
@@ -237,7 +255,8 @@ function M.set_file(idx)
   if not session then
     return
   end
-  if idx >= 1 and idx <= #session.files then
+  local files = M.active_files()
+  if idx >= 1 and idx <= #files then
     session.current_file_idx = idx
   end
 end
@@ -248,6 +267,37 @@ function M.set_commits(commits)
   if session then
     session.commits = commits
   end
+end
+
+---@return "all"|"current_commit"|"select_commit"
+function M.scope_mode()
+  if not session then
+    return "all"
+  end
+  return session.scope_mode or "all"
+end
+
+---@param mode "all"|"current_commit"|"select_commit"
+function M.set_scope_mode(mode)
+  if not session then
+    return
+  end
+  session.scope_mode = mode
+  if mode == "all" then
+    session.current_commit_idx = nil
+    session.current_file_idx = 1
+  elseif not session.current_commit_idx and #session.commits > 0 then
+    session.current_commit_idx = 1
+    session.current_file_idx = 1
+  end
+end
+
+---@return boolean
+function M.uses_commit_scope()
+  return session ~= nil
+    and session.scope_mode ~= "all"
+    and session.current_commit_idx ~= nil
+    and session.commits[session.current_commit_idx] ~= nil
 end
 
 --- Get the currently selected commit (nil = all changes).
@@ -267,9 +317,11 @@ function M.set_commit(idx)
   end
   if idx == nil then
     session.current_commit_idx = nil
+    session.scope_mode = "all"
     session.current_file_idx = 1
   elseif idx >= 1 and idx <= #session.commits then
     session.current_commit_idx = idx
+    session.scope_mode = session.scope_mode == "select_commit" and "select_commit" or "current_commit"
     session.current_file_idx = 1
   end
 end
@@ -280,14 +332,21 @@ function M.active_files()
   if not session then
     return {}
   end
-  if session.current_commit_idx then
+  if M.uses_commit_scope() then
     local commit = session.commits[session.current_commit_idx]
     if commit and commit.files then
       return commit.files
     end
     return {}
   end
-  return session.files
+  local result = {}
+  for _, file in ipairs(session.files) do
+    table.insert(result, file)
+  end
+  for _, file in ipairs(session.untracked_files or {}) do
+    table.insert(result, file)
+  end
+  return result
 end
 
 --- Get the currently selected file from the active file list.
@@ -304,6 +363,80 @@ function M.active_current_file()
   return files[idx]
 end
 
+---@return ReviewFile[]
+function M.all_tracked_files()
+  if not session then
+    return {}
+  end
+  return session.files
+end
+
+---@return ReviewFile[]
+function M.untracked_files()
+  if not session then
+    return {}
+  end
+  return session.untracked_files or {}
+end
+
+---@return ReviewFile[]
+function M.all_files()
+  if not session then
+    return {}
+  end
+  local result = {}
+  for _, file in ipairs(session.files) do
+    table.insert(result, file)
+  end
+  for _, file in ipairs(session.untracked_files or {}) do
+    table.insert(result, file)
+  end
+  return result
+end
+
+---@param sha string
+---@return boolean
+function M.has_commit(sha)
+  if not session or not sha then
+    return false
+  end
+  for _, commit in ipairs(session.commits) do
+    if commit.sha == sha then
+      return true
+    end
+  end
+  return false
+end
+
+---@return string|nil, string|nil
+function M.context_signature()
+  if not session then
+    return nil, nil
+  end
+  return session.repo_root, session.branch
+end
+
+---@return boolean
+function M.session_matches_git()
+  if not session then
+    return true
+  end
+  local git = require("review.git")
+  return session.repo_root == git.root() and session.branch == (git.current_branch() or "HEAD")
+end
+
+---@param reason string|nil
+function M.set_remote_context_stale(reason)
+  if session then
+    session.remote_context_stale = reason
+  end
+end
+
+---@return string|nil
+function M.remote_context_stale_reason()
+  return session and session.remote_context_stale or nil
+end
+
 --- Add a local note.
 ---@param file_path string
 ---@param line number
@@ -315,6 +448,7 @@ function M.add_note(file_path, line, body, end_line, side, note_type)
   if not session then
     return
   end
+  local commit = M.uses_commit_scope() and M.current_commit() or nil
   local note = {
     id = next_note_id,
     file_path = file_path,
@@ -324,6 +458,8 @@ function M.add_note(file_path, line, body, end_line, side, note_type)
     body = body,
     note_type = note_type or "comment",
     status = "draft",
+    commit_sha = commit and commit.sha or nil,
+    commit_short_sha = commit and commit.short_sha or nil,
     url = nil,
   }
   next_note_id = next_note_id + 1
@@ -343,6 +479,94 @@ function M.get_notes(file_path)
     return session.notes
   end
   return session.note_index_by_file[file_path] or {}
+end
+
+---@param note ReviewNote
+---@return boolean
+local function note_has_active_file(note)
+  if not note.file_path then
+    return true
+  end
+  for _, file in ipairs(M.active_files()) do
+    if file.path == note.file_path then
+      return true
+    end
+  end
+  return false
+end
+
+---@param note ReviewNote
+---@return boolean
+local function note_has_known_file(note)
+  if not note.file_path then
+    return true
+  end
+  for _, file in ipairs(M.all_files()) do
+    if file.path == note.file_path then
+      return true
+    end
+  end
+  return false
+end
+
+---@param note ReviewNote
+---@return boolean
+function M.note_is_stale(note)
+  if not session then
+    return false
+  end
+  if note.commit_sha and not M.has_commit(note.commit_sha) then
+    return true
+  end
+  if note.status == "remote" and session.remote_context_stale then
+    return true
+  end
+  if not note_has_known_file(note) then
+    return true
+  end
+  return false
+end
+
+---@param note ReviewNote
+---@return boolean
+function M.note_in_scope(note)
+  if not session then
+    return false
+  end
+  if M.note_is_stale(note) then
+    return false
+  end
+
+  if note.status == "remote" then
+    if note.is_general then
+      return session.scope_mode == "all"
+    end
+    return note_has_active_file(note)
+  end
+
+  if session.scope_mode == "all" then
+    return true
+  end
+
+  local commit = M.current_commit()
+  return commit ~= nil and note.commit_sha == commit.sha
+end
+
+---@return ReviewNote[], ReviewNote[]
+function M.scoped_notes()
+  if not session then
+    return {}, {}
+  end
+  local scoped = {}
+  local stale = {}
+  for _, note in ipairs(session.notes) do
+    if M.note_is_stale(note) then
+      table.insert(stale, note)
+    elseif M.note_in_scope(note) then
+      table.insert(scoped, note)
+    end
+  end
+  return scoped, stale
 end
 
 --- Remove a note by index in the session notes list.

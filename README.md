@@ -9,12 +9,15 @@ Minimal code review plugin for Neovim.
 - Dual-panel layout (file explorer + diff viewer) in its own tab
 - Unified and side-by-side split views
 - Word-level diff highlighting
-- Commit navigation with per-commit file filtering
+- Explicit review scope modes: `All`, `Current Commit`, and `Select Commit`
+- Commit navigation with per-commit file and thread filtering
+- Untracked files surfaced in the rail while reviewing the full branch
 - Inline notes on any diff line or visual selection
 - Suggestion notes with GitHub-compatible `suggestion` blocks
 - Notes list panel with draft/staged/published workflow
 - Note persistence across sessions
 - Grouped thread queue for GitHub/GitLab and local notes
+- Stale notes/threads surfaced separately when files disappear or remote review context goes stale
 - Reference other notes with `#<id>` syntax
 - Export notes to markdown
 - Copy all notes to the clipboard for LLM handoff
@@ -124,6 +127,13 @@ require("review").setup({
 
 Explorer: `<CR>` select, `N` notes list, `?` help, `q` close full review
 
+The left rail shows the active `Scope` explicitly:
+- `all` for the whole branch/range
+- `current · <sha>` for the current commit
+- `select · <sha>` while browsing commits directly from the rail
+
+In `all` scope the `Files` section can include an `Untracked` subsection, and stale notes/threads are surfaced under `Stale` instead of silently disappearing.
+
 Diff viewer:
 
 | Key         | What                               |
@@ -138,7 +148,7 @@ Diff viewer:
 | `]f` / `[f` | next/prev file                     |
 | `n`, `]n` / `[n` | next/prev note                 |
 | `s`         | toggle split                       |
-| `T`         | cycle stack/commit scope           |
+| `T`         | cycle `All` -> `Current Commit` -> `Select Commit` |
 | `f`         | focus the Files section            |
 | `t`         | focus the Threads section          |
 | `q`         | close full review                  |
@@ -188,6 +198,10 @@ Use `:ReviewClipboard` or `y` from the notes list to copy the actionable review 
 Use `:ReviewClipboardLocal` or `Y` if you only want your own local draft/staged notes.
 
 Remote review threads are shown separately from the file list in the sidebar, grouped by source such as `github/`, `gitlab/`, or `local/`.
+
+When you create a local note while scoped to a commit, the note is stamped with that commit SHA. In `all` scope those commit-bound notes can still be surfaced, but in commit scope only matching local notes are shown. Remote GitHub/GitLab threads stay conservative: they are filtered by active file membership rather than guessed commit attribution.
+
+If you switch branches or the remote review context becomes outdated, `:ReviewRefresh`/UI refresh will reopen the session against the current branch and move no-longer-valid notes/threads into `Stale`.
 
 ## Inspiration
 

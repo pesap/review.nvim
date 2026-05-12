@@ -3,16 +3,19 @@
 local M = {}
 
 local cached_path = nil
+local cached_path_key = nil
 local cached_remote_path = nil
+local cached_remote_path_key = nil
 
 ---@return string|nil
-local function repo_key()
+local function storage_key()
   local git = require("review.git")
   local root = git.root()
   if not root then
     return nil
   end
-  return root:gsub("[/\\:]", "_")
+  local branch = git.current_branch() or "HEAD"
+  return (root .. "::" .. branch):gsub("[/\\:]", "_")
 end
 
 ---@return string
@@ -25,31 +28,33 @@ end
 --- Get the storage file path for the current git repo (cached after first call).
 ---@return string|nil
 local function storage_path()
-  if cached_path then
-    return cached_path
-  end
-
-  local key = repo_key()
+  local key = storage_key()
   if not key then
     return nil
   end
 
+  if cached_path and cached_path_key == key then
+    return cached_path
+  end
+
   cached_path = storage_dir() .. "/" .. key .. ".json"
+  cached_path_key = key
   return cached_path
 end
 
 ---@return string|nil
 local function remote_cache_path()
-  if cached_remote_path then
-    return cached_remote_path
-  end
-
-  local key = repo_key()
+  local key = storage_key()
   if not key then
     return nil
   end
 
+  if cached_remote_path and cached_remote_path_key == key then
+    return cached_remote_path
+  end
+
   cached_remote_path = storage_dir() .. "/" .. key .. ".remote.json"
+  cached_remote_path_key = key
   return cached_remote_path
 end
 
@@ -105,6 +110,8 @@ function M.load()
     note.note_type = note.note_type or "comment"
     note.side = note.side or "new"
     note.status = note.status or "draft"
+    note.commit_sha = note.commit_sha or nil
+    note.commit_short_sha = note.commit_short_sha or nil
     -- Drop notes with stale statuses (e.g. "published" from old versions)
     if valid_status[note.status] then
       table.insert(result, note)
