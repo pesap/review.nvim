@@ -13,6 +13,7 @@ local setup_diff_keymaps
 local navigator_width
 local current_navigator_width
 local truncate_end_text
+local notes_list_win
 
 local HL = {
   add = "ReviewDiffAdd",
@@ -137,8 +138,8 @@ function M.setup_highlights(colorblind)
   set(0, HL.note_draft, { fg = colorblind and "#ebcb8b" or "#e5c07b" })
   set(0, HL.note_ref, { fg = colorblind and "#56b4e9" or "#61afef", underline = true })
   set(0, HL.note_remote, { fg = colorblind and "#4db6ac" or "#56b6c2" })
-  set(0, HL.note_remote_resolved, { fg = "#5c6370", italic = true })
-  set(0, HL.note_author, { fg = colorblind and "#cc79a7" or "#c678dd", italic = true })
+  set(0, HL.note_remote_resolved, { fg = "#5c6370" })
+  set(0, HL.note_author, { fg = colorblind and "#cc79a7" or "#c678dd" })
   set(0, HL.note_separator, { fg = "#3e4452" })
   set(0, HL.threads_header, { fg = colorblind and "#c7a252" or "#e5c07b", bold = true })
   set(0, HL.vendor_group, { fg = colorblind and "#4db6ac" or "#56b6c2", bold = true })
@@ -312,6 +313,10 @@ local function apply_review_window_style(win, kind)
     ",EndOfBuffer:",
     HL.pane_bg,
     ",SignColumn:",
+    HL.pane_bg,
+    ",StatusLine:",
+    HL.pane_bg,
+    ",StatusLineNC:",
     HL.pane_bg,
     ",WinSeparator:",
     HL.window_edge,
@@ -494,6 +499,47 @@ local function sync_local_review_state()
 end
 
 ---@param ui_state ReviewUIState
+local function rebalance_left_rail(ui_state)
+  local wins = {}
+  if ui_state.files_win and vim.api.nvim_win_is_valid(ui_state.files_win) then
+    table.insert(wins, { win = ui_state.files_win, weight = 5, min_height = 6 })
+  end
+  if ui_state.threads_win and vim.api.nvim_win_is_valid(ui_state.threads_win) then
+    table.insert(wins, { win = ui_state.threads_win, weight = 3, min_height = 5 })
+  end
+  if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
+    table.insert(wins, { win = ui_state.git_win, weight = 2, min_height = 4 })
+  end
+  if #wins < 2 then
+    return
+  end
+
+  local total_height = 0
+  local total_weight = 0
+  local reserved_min = 0
+  for _, entry in ipairs(wins) do
+    total_height = total_height + vim.api.nvim_win_get_height(entry.win)
+    total_weight = total_weight + entry.weight
+    reserved_min = reserved_min + entry.min_height
+  end
+
+  local slack = math.max(total_height - reserved_min, 0)
+  local assigned = 0
+  for i, entry in ipairs(wins) do
+    local target = entry.min_height
+    if i < #wins then
+      local extra = math.floor(slack * entry.weight / total_weight)
+      target = target + extra
+      assigned = assigned + target
+    else
+      target = math.max(entry.min_height, total_height - assigned)
+    end
+    vim.wo[entry.win].winfixheight = true
+    vim.api.nvim_win_set_height(entry.win, target)
+  end
+end
+
+---@param ui_state ReviewUIState
 local function ensure_git_status_pane(ui_state)
   if not worktree_git_enabled() or (ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win)) then
     return
@@ -509,8 +555,6 @@ local function ensure_git_status_pane(ui_state)
   vim.cmd("belowright split")
 
   local git_win = vim.api.nvim_get_current_win()
-  local pane_height = math.max(8, math.min(12, math.floor(vim.o.lines * 0.2)))
-  vim.api.nvim_win_set_height(git_win, pane_height)
   apply_git_window_style(git_win)
 
   if git_mod.is_gitbutler_workspace and git_mod.is_gitbutler_workspace() then
@@ -523,6 +567,7 @@ local function ensure_git_status_pane(ui_state)
     vim.b[gitbutler_buf].review_git_pane = true
     setup_git_keymaps(gitbutler_buf, { allow_navigation = true })
     attach_review_quit_guard(gitbutler_buf)
+    rebalance_left_rail(ui_state)
     if vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
     end
@@ -559,6 +604,7 @@ local function ensure_git_status_pane(ui_state)
   if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
     apply_git_window_style(ui_state.git_win)
   end
+  rebalance_left_rail(ui_state)
   if ui_state.git_buf and vim.api.nvim_buf_is_valid(ui_state.git_buf) then
     attach_review_quit_guard(ui_state.git_buf)
   end
@@ -966,13 +1012,14 @@ end
 
 navigator_width = function()
   local cols = vim.o.columns
-  if cols >= 170 then
-    return 55
+  local target = math.max(math.floor(cols * 0.382), 21)
+  local a, b = 13, 21
+
+  while b <= target do
+    a, b = b, a + b
   end
-  if cols >= 96 then
-    return 34
-  end
-  return 21
+
+  return a
 end
 
 current_navigator_width = function()
@@ -1095,7 +1142,12 @@ local function build_thread_sections(active_files)
     end
 
     if note.status == "remote" then
-      if not note.resolved then
+      if note.resolved then
+        entry.resolved_count = (entry.resolved_count or 0) + 1
+        if not entry.first_resolved then
+          entry.first_resolved = note
+        end
+      else
         entry.vendor_count = entry.vendor_count + 1
         if not entry.first_vendor then
           entry.first_vendor = note
@@ -1111,6 +1163,7 @@ local function build_thread_sections(active_files)
   end
 
   local vendor_rows = {}
+  local resolved_rows = {}
   local local_rows = {}
   for path, entry in pairs(by_path) do
     if entry.vendor_count > 0 then
@@ -1121,6 +1174,16 @@ local function build_thread_sections(active_files)
         idx = entry.idx,
         count = entry.vendor_count,
         note = entry.first_vendor,
+      })
+    end
+    if entry.resolved_count and entry.resolved_count > 0 then
+      table.insert(resolved_rows, {
+        source = "resolved",
+        label = "resolved/",
+        path = path,
+        idx = entry.idx,
+        count = entry.resolved_count,
+        note = entry.first_resolved,
       })
     end
     if entry.local_count > 0 then
@@ -1146,11 +1209,15 @@ local function build_thread_sections(active_files)
   end
 
   sort_rows(vendor_rows)
+  sort_rows(resolved_rows)
   sort_rows(local_rows)
 
   local sections = {}
   if #vendor_rows > 0 then
     table.insert(sections, { label = vendor_label, rows = vendor_rows })
+  end
+  if #resolved_rows > 0 then
+    table.insert(sections, { label = "resolved/", rows = resolved_rows })
   end
   if #local_rows > 0 then
     table.insert(sections, { label = "local/", rows = local_rows })
@@ -1730,7 +1797,9 @@ local function render_threads_pane(buf)
       table.insert(threads_line_map, { type = "header", section = section_name })
       table.insert(highlights, {
         line = #lines - 1,
-        hl = section.label == "local/" and HL.local_group or HL.vendor_group,
+        hl = section.label == "local/" and HL.local_group
+          or section.label == "resolved/" and HL.note_remote_resolved
+          or HL.vendor_group,
         col_start = 3,
         col_end = -1,
       })
@@ -1758,7 +1827,10 @@ local function render_threads_pane(buf)
           section = section_name,
         })
         local li = #lines - 1
-        local source_hl = (row.note and row.note.status == "remote") and HL.note_remote or HL.note_sign
+        local source_hl = HL.note_sign
+        if row.note and row.note.status == "remote" then
+          source_hl = row.note.resolved and HL.note_remote_resolved or HL.note_remote
+        end
         local name_start = thread_line:find(short_name, 1, true)
         if name_start then
           table.insert(highlights, {
@@ -2780,6 +2852,8 @@ function M.open()
   vim.wo[diff_win].signcolumn = "yes"
   vim.wo[files_win].winfixwidth = true
   vim.wo[threads_win].winfixwidth = true
+  vim.wo[files_win].winfixheight = true
+  vim.wo[threads_win].winfixheight = true
   vim.wo[diff_win].cursorline = true
   vim.wo[diff_win].cursorlineopt = "line"
   vim.wo[files_win].cursorline = true
@@ -2788,6 +2862,9 @@ function M.open()
   vim.wo[threads_win].cursorline = true
   vim.wo[threads_win].cursorlineopt = "line"
   vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = threads_win })
+
+  local previous_laststatus = vim.o.laststatus
+  vim.o.laststatus = 3
 
   state.set_ui({
     files_buf = files_buf,
@@ -2801,7 +2878,9 @@ function M.open()
     tab = tab,
     explorer_width = vim.api.nvim_win_get_width(files_win),
     view_mode = config.view or "unified",
+    previous_laststatus = previous_laststatus,
   })
+  rebalance_left_rail(state.get_ui())
 
   setup_nav_keymaps(files_buf)
   setup_nav_keymaps(threads_buf)
@@ -2870,6 +2949,9 @@ function M.close()
           end
         end
       end
+    end
+    if ui and ui.previous_laststatus ~= nil then
+      vim.o.laststatus = ui.previous_laststatus
     end
     state.destroy()
   end)
@@ -3596,9 +3678,37 @@ function M.open_thread_view(note)
   end, buf_opts)
 end
 
+local function close_notes_list_window(win)
+  if win and vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_win_close(win, true)
+  end
+  if notes_list_win == win then
+    notes_list_win = nil
+  end
+end
+
+function M.refresh_notes_list()
+  if not notes_list_win or not vim.api.nvim_win_is_valid(notes_list_win) then
+    notes_list_win = nil
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(notes_list_win)
+  close_notes_list_window(notes_list_win)
+  M.open_notes_list({ cursor_line = cursor[1] })
+end
+
+---@param win number
+---@param opts table|nil
+local function reopen_notes_list(win, opts)
+  close_notes_list_window(win)
+  M.open_notes_list(opts)
+end
+
 --- Open a floating window listing all notes across all files.
 --- Pressing <CR> on a note jumps to that file and line.
-function M.open_notes_list()
+---@param opts table|nil
+function M.open_notes_list(opts)
+  opts = opts or {}
   if not state.session_matches_git() then
     require("review").reopen_session()
     return
@@ -3894,8 +4004,11 @@ function M.open_notes_list()
     title_pos = "center",
   })
   apply_review_window_style(list_win, "float")
+  notes_list_win = list_win
 
   vim.wo[list_win].cursorline = true
+  local initial_cursor = math.min(math.max(opts.cursor_line or 1, 1), #lines)
+  vim.api.nvim_win_set_cursor(list_win, { initial_cursor, 0 })
 
   local ns = vim.api.nvim_create_namespace("review_notes_list")
   for i, _ in ipairs(lines) do
@@ -3928,10 +4041,10 @@ function M.open_notes_list()
   local buf_opts = { buffer = list_buf, noremap = true, silent = true }
 
   vim.keymap.set("n", "q", function()
-    vim.api.nvim_win_close(list_win, true)
+    close_notes_list_window(list_win)
   end, buf_opts)
   vim.keymap.set("n", "<Esc>", function()
-    vim.api.nvim_win_close(list_win, true)
+    close_notes_list_window(list_win)
   end, buf_opts)
   vim.keymap.set("n", "?", function()
     M.open_help()
@@ -3948,8 +4061,7 @@ function M.open_notes_list()
       return
     end
     state.toggle_staged(ref.note_id)
-    vim.api.nvim_win_close(list_win, true)
-    M.open_notes_list()
+    reopen_notes_list(list_win)
     M.refresh()
   end, buf_opts)
 
@@ -3976,8 +4088,7 @@ function M.open_notes_list()
       end
       local count = state.publish_staged(url_map)
       vim.notify(count .. " note(s) published locally (no PR/MR detected)", vim.log.levels.INFO)
-      vim.api.nvim_win_close(list_win, true)
-      M.open_notes_list()
+      reopen_notes_list(list_win)
       M.refresh()
       return
     end
@@ -4015,8 +4126,7 @@ function M.open_notes_list()
       vim.notify(count .. " note(s) published to " .. info.forge, vim.log.levels.INFO)
     end
 
-    vim.api.nvim_win_close(list_win, true)
-    M.open_notes_list()
+    reopen_notes_list(list_win)
     M.refresh()
     require("review").refresh_comments()
   end, buf_opts)
@@ -4048,7 +4158,7 @@ function M.open_notes_list()
     local cleared = state.clear_local_notes()
     if cleared > 0 then
       vim.notify(cleared .. " local note(s) cleared", vim.log.levels.INFO)
-      vim.api.nvim_win_close(list_win, true)
+      close_notes_list_window(list_win)
       M.refresh()
       if #state.get_notes() > 0 then
         M.open_notes_list()
@@ -4057,9 +4167,8 @@ function M.open_notes_list()
   end, buf_opts)
 
   vim.keymap.set("n", "R", function()
-    vim.api.nvim_win_close(list_win, true)
     vim.notify("Refreshing PR comments...", vim.log.levels.INFO)
-    require("review").refresh_comments()
+    require("review").refresh_comments({ preserve_notes_list = true })
   end, buf_opts)
 
   vim.keymap.set("n", "gd", function()
@@ -4100,7 +4209,7 @@ function M.open_notes_list()
     if ref.status == "remote" and not ref.file_path then
       local note_obj = state.get_note_by_id(ref.note_id)
       if note_obj then
-        vim.api.nvim_win_close(list_win, true)
+        close_notes_list_window(list_win)
         M.open_thread_view(note_obj)
       end
       return
@@ -4112,7 +4221,7 @@ function M.open_notes_list()
     local is_remote = ref.status == "remote"
     local remote_note_id = is_remote and ref.note_id or nil
 
-    vim.api.nvim_win_close(list_win, true)
+    close_notes_list_window(list_win)
 
     vim.schedule(function()
       local sess = state.get()
@@ -4172,8 +4281,7 @@ function M.open_notes_list()
       return
     end
     state.remove_note(ref.idx)
-    vim.api.nvim_win_close(list_win, true)
-    M.open_notes_list()
+    reopen_notes_list(list_win)
     M.refresh()
   end, buf_opts)
 

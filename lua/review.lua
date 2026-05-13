@@ -278,7 +278,9 @@ end
 
 --- Fetch (or re-fetch) remote PR comments and refresh the UI.
 --- Runs asynchronously — UI updates when comments arrive.
-function M.refresh_comments()
+---@param opts table|nil
+function M.refresh_comments(opts)
+  opts = opts or {}
   local state = require("review.state")
   local s = state.get()
   if not s then
@@ -298,8 +300,16 @@ function M.refresh_comments()
     M.reopen_session()
     return
   end
+  local function refresh_ui()
+    local ui = require("review.ui")
+    ui.refresh()
+    if opts.preserve_notes_list then
+      ui.refresh_notes_list()
+    end
+  end
+
   state.set_comments_loading(true)
-  require("review.ui").refresh()
+  refresh_ui()
 
   -- Fetch asynchronously
   forge.fetch_comments_async(forge_info, function(comments, fetch_err)
@@ -313,7 +323,7 @@ function M.refresh_comments()
     if fetch_err then
       state.set_remote_context_stale(fetch_err)
       vim.notify("Could not load PR comments: " .. fetch_err, vim.log.levels.WARN)
-      require("review.ui").refresh()
+      refresh_ui()
       return
     end
 
@@ -324,7 +334,7 @@ function M.refresh_comments()
     end
     require("review.storage").save_remote_bundle(forge_info, s.base_ref, comments or {})
 
-    require("review.ui").refresh()
+    refresh_ui()
   end)
 end
 

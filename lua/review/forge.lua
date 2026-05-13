@@ -273,6 +273,7 @@ query {
         nodes {
           id
           isResolved
+          isOutdated
           comments(first: 100) {
             nodes {
               id
@@ -390,6 +391,7 @@ local function parse_github_threads(raw)
       thread_node_id = thread.id,
       url = top.url,
       resolved = thread.isResolved or false,
+      outdated = thread.isOutdated or false,
     })
     ::continue::
   end

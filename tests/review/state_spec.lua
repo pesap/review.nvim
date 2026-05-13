@@ -190,6 +190,79 @@ describe("review.state note indexes", function()
     assert.are.equal("remote", stale_notes[1].status)
   end)
 
+  it("keeps outdated unresolved remote threads visible", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = {} },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/state-spec",
+      requested_ref = nil,
+      untracked_files = {},
+    })
+    state.load_remote_comments({
+      {
+        file_path = "lua/review.lua",
+        line = 12,
+        side = "new",
+        replies = {
+          { body = "outdated", author = "octocat" },
+        },
+        resolved = false,
+        outdated = true,
+      },
+    })
+
+    local scoped, stale_notes = state.scoped_notes()
+
+    assert.are.equal(1, #scoped)
+    assert.are.equal(0, #stale_notes)
+    assert.is_true(scoped[1].outdated)
+  end)
+
+  it("keeps remote notes visible across scope changes", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = {} },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/state-spec",
+      requested_ref = nil,
+      untracked_files = {},
+    })
+    state.set_commits({
+      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
+        { path = "lua/review.lua", status = "M", hunks = {} },
+      } },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+    state.load_remote_comments({
+      {
+        file_path = "ROADMAP.md",
+        line = 16,
+        side = "new",
+        replies = {
+          { body = "remote", author = "octocat" },
+        },
+        resolved = false,
+      },
+      {
+        file_path = nil,
+        line = nil,
+        side = nil,
+        replies = {
+          { body = "discussion", author = "octocat" },
+        },
+        resolved = nil,
+        is_general = true,
+      },
+    })
+
+    local scoped, stale_notes = state.scoped_notes()
+
+    assert.are.equal(2, #scoped)
+    assert.are.equal(0, #stale_notes)
+  end)
+
   it("detects when the live git branch no longer matches the session", function()
     assert.is_true(state.session_matches_git())
 

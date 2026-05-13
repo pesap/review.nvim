@@ -393,6 +393,56 @@ describe("review.ui explorer rail", function()
     assert.are.equal(ui_state.threads_win, vim.api.nvim_get_current_win())
   end)
 
+  it("shows open, resolved, and outdated unresolved remote threads", function()
+    state.create("local", "main", {
+      { path = "lua/open.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/resolved.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+      { path = "lua/outdated.lua", status = "M", hunks = { sample_hunk(6, 6) } },
+    })
+    state.set_forge_info({ forge = "github", pr_number = 9 })
+
+    state.load_remote_comments({
+      {
+        file_path = "lua/open.lua",
+        line = 2,
+        side = "new",
+        replies = {
+          { body = "open", author = "octocat" },
+        },
+        resolved = false,
+      },
+      {
+        file_path = "lua/resolved.lua",
+        line = 4,
+        side = "new",
+        replies = {
+          { body = "resolved", author = "octocat" },
+        },
+        resolved = true,
+      },
+      {
+        file_path = "lua/outdated.lua",
+        line = 6,
+        side = "new",
+        replies = {
+          { body = "outdated", author = "octocat" },
+        },
+        resolved = false,
+        outdated = true,
+      },
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, "   github/"))
+    assert.is_true(vim.tbl_contains(lines, "   resolved/"))
+    assert.is_true(vim.tbl_contains(lines, "     open.lua [1]"))
+    assert.is_true(vim.tbl_contains(lines, "     outdated.lua [1]") or vim.tbl_contains(lines, "     outd…lua [1]"))
+    assert.is_true(vim.tbl_contains(lines, "     resolved.lua [1]") or vim.tbl_contains(lines, "     reso…lua [1]"))
+    assert.is_false(vim.tbl_contains(lines, " Stale"))
+  end)
+
   it("aligns thread badges within a section", function()
     state.create("local", "main", {
       { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
@@ -507,6 +557,32 @@ describe("review.ui explorer rail", function()
     assert.is_true(vim.fn.strdisplaywidth(lines[2]) <= 20)
     assert.is_true(lines[1]:match("…") ~= nil)
     assert.is_true(lines[2]:match("…") ~= nil)
+
+    vim.o.columns = original_columns
+  end)
+
+  it("uses fibonacci rail widths across common column sizes", function()
+    local original_columns = vim.o.columns
+
+    local cases = {
+      { columns = 80, expected = 21 },
+      { columns = 96, expected = 34 },
+      { columns = 170, expected = 55 },
+    }
+
+    for _, case in ipairs(cases) do
+      if state and state.get() then
+        pcall(ui.close)
+      end
+      vim.o.columns = case.columns
+      state.create("local", "main", {
+        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      })
+
+      ui.open()
+
+      assert.are.equal(case.expected, vim.api.nvim_win_get_width(state.get_ui().explorer_win))
+    end
 
     vim.o.columns = original_columns
   end)
@@ -1026,6 +1102,88 @@ describe("review.ui notes list", function()
     assert.is_true(vim.fn.strdisplaywidth(title) <= cfg.width)
 
     vim.o.columns = original_columns
+  end)
+
+  it("shows remote discussions and remote file comments regardless of current commit scope", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.set_commits({
+      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
+        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      } },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+    state.load_remote_comments({
+      {
+        file_path = "ROADMAP.md",
+        line = 16,
+        side = "new",
+        replies = {
+          { body = "remote file comment", author = "octocat", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = false,
+      },
+      {
+        file_path = nil,
+        line = nil,
+        side = nil,
+        replies = {
+          { body = "discussion body", author = "copilot-pull-request-reviewer", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = nil,
+        is_general = true,
+      },
+    })
+
+    ui.open_notes_list()
+
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Open Threads (1)"))
+    assert.is_true(vim.tbl_contains(lines, " Discussion (1)"))
+  end)
+
+  it("keeps the notes list open while refreshing remote comments", function()
+    local original_refresh_comments = review.refresh_comments
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.load_remote_comments({
+      {
+        file_path = "lua/review.lua",
+        line = 2,
+        side = "new",
+        replies = {
+          { body = "resolved", author = "octocat", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = true,
+      },
+    })
+
+    local calls = 0
+    review.refresh_comments = function(opts)
+      calls = calls + 1
+      assert.is_true(opts.preserve_notes_list)
+      state.set_comments_loading(true)
+      ui.refresh_notes_list()
+      state.set_comments_loading(false)
+      ui.refresh_notes_list()
+    end
+
+    ui.open_notes_list()
+    local original_win = vim.api.nvim_get_current_win()
+
+    send_keys("R")
+
+    assert.are.equal(1, calls)
+    assert.is_true(vim.api.nvim_win_is_valid(vim.api.nvim_get_current_win()))
+    assert.are_not.equal(original_win, 0)
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Resolved (1)"))
+
+    review.refresh_comments = original_refresh_comments
   end)
 
   it("falls back to a minimal notes title on extremely narrow floats", function()
