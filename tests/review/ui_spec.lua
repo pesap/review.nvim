@@ -262,6 +262,52 @@ describe("review.ui explorer rail", function()
     assert.are.equal(" GitButler workspace", lines[1])
     assert.is_true(vim.tbl_contains(lines, " unassigned"))
     assert.is_true(vim.tbl_contains(lines, " stack s1"))
+
+    vim.api.nvim_set_current_win(ui_state.git_win)
+    send_keys("f")
+    assert.are.equal(ui_state.files_win, vim.api.nvim_get_current_win())
+
+    vim.api.nvim_set_current_win(ui_state.git_win)
+    send_keys("t")
+    assert.are.equal(ui_state.threads_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("separates unassigned GitButler changes from branch files", function()
+    state.create("local", "gitbutler/workspace", {
+      {
+        path = "lua/review.lua",
+        status = "M",
+        hunks = { sample_hunk(2, 2) },
+        gitbutler = { kind = "branch", branch_name = "feature/gb" },
+      },
+      {
+        path = ".nvimlog",
+        status = "A",
+        hunks = { sample_hunk(1, 1) },
+        gitbutler = { kind = "unassigned" },
+      },
+      {
+        path = "mystery.lua",
+        status = "?",
+        hunks = { sample_hunk(1, 1) },
+        gitbutler = { kind = "branch", branch_name = "feature/gb" },
+      },
+    }, {
+      vcs = "gitbutler",
+      repo_root = "/tmp/review-nvim",
+      branch = "gitbutler/workspace",
+      gitbutler = {},
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().files_buf, 0, -1, false)
+    local joined = table.concat(lines, "\n")
+    assert.is_true(joined:match("  M lua/.*%.lua") ~= nil)
+    assert.is_true(joined:find("Unassigned", 1, true) ~= nil)
+    assert.is_true(joined:find("  A .nvimlog", 1, true) ~= nil)
+    assert.is_true(joined:find("Untracked", 1, true) ~= nil)
+    assert.is_true(joined:match("  %? myst.*%.lua") ~= nil)
   end)
 
   it("focuses the fugitive pane from explorer and diff", function()
@@ -420,7 +466,8 @@ describe("review.ui explorer rail", function()
         "╭┄fu [fugitive-left-rail-stack]",
         "┊● 1234567 feat(ui): split files and threads in left rail",
         "┊● abcdef0 (upstream)",
-      }, nil
+      },
+        nil
     end
     git.open_fugitive_status = function()
       error("fugitive should not open for GitButler workspaces")
@@ -442,6 +489,10 @@ describe("review.ui explorer rail", function()
     local ui_state = state.get_ui()
     local lines = vim.api.nvim_buf_get_lines(ui_state.git_buf, 0, -1, false)
     assert.are.equal("╭┄fu [fugitive-left-rail-stack]", lines[1])
+
+    vim.api.nvim_set_current_win(ui_state.git_win)
+    send_keys("f")
+    assert.are.equal(ui_state.files_win, vim.api.nvim_get_current_win())
 
     vim.api.nvim_set_current_win(ui_state.git_win)
     send_keys("t")
@@ -567,7 +618,13 @@ describe("review.ui explorer rail", function()
     local files_buf = state.get_ui().explorer_buf
     local files_ns = vim.api.nvim_create_namespace("review_explorer")
     local marks = vim.api.nvim_buf_get_extmarks(files_buf, files_ns, 0, -1, { details = true })
-    local thread_marks = vim.api.nvim_buf_get_extmarks(state.get_ui().threads_buf, vim.api.nvim_create_namespace("review_threads"), 0, -1, { details = true })
+    local thread_marks = vim.api.nvim_buf_get_extmarks(
+      state.get_ui().threads_buf,
+      vim.api.nvim_create_namespace("review_threads"),
+      0,
+      -1,
+      { details = true }
+    )
     local groups = {}
     local add_mark
     local del_mark
@@ -710,9 +767,15 @@ describe("review.ui explorer rail", function()
     )
 
     state.set_commits({
-      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
-        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
-      } },
+      {
+        sha = "abcdef123456",
+        short_sha = "abcdef1",
+        message = "Polish UI",
+        author = "psanchez",
+        files = {
+          { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+        },
+      },
     })
     state.set_scope_mode("current_commit")
     state.set_commit(1)
@@ -1202,9 +1265,15 @@ describe("review.ui notes list", function()
       { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
     })
     state.set_commits({
-      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
-        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
-      } },
+      {
+        sha = "abcdef123456",
+        short_sha = "abcdef1",
+        message = "Polish UI",
+        author = "psanchez",
+        files = {
+          { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+        },
+      },
     })
     state.set_scope_mode("current_commit")
     state.set_commit(1)

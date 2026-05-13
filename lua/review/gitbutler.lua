@@ -158,9 +158,11 @@ end
 ---@return ReviewFile
 local function change_to_file(change, opts)
   opts = opts or {}
+  local path = change.path or change.filePath or ""
+  local change_type = opts.change_types_by_path and opts.change_types_by_path[path]
   local file = {
-    path = change.path or change.filePath or "",
-    status = status_code(change.status or change.changeType),
+    path = path,
+    status = status_code(change_type or change.status or change.changeType),
     hunks = {},
     gitbutler = opts.gitbutler,
   }
@@ -276,9 +278,17 @@ function M.workspace_review()
     end
   end
 
+  local unassigned_change_types = {}
+  for _, change in ipairs(status.unassignedChanges or {}) do
+    local path = change.filePath or change.path
+    if path then
+      unassigned_change_types[path] = change.changeType or change.status
+    end
+  end
   local unassigned, unassigned_err = M.diff_files(nil, {
     unassigned = true,
     gitbutler = { kind = "unassigned" },
+    change_types_by_path = unassigned_change_types,
   })
   if not unassigned then
     return nil, unassigned_err
