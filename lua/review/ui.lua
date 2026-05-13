@@ -1915,10 +1915,31 @@ local function render_files_pane(buf)
     end
   end
 
-  add_file_rows("files", tracked_files)
-  if state.scope_mode() == "all" and #untracked_files > 0 then
-    add_section_header("files", "Untracked", HL.panel_meta)
-    add_file_rows("files", untracked_files)
+  if state.is_gitbutler() and state.scope_mode() == "all" then
+    local branch_entries = {}
+    local unassigned_entries = {}
+    for _, entry in ipairs(tracked_files) do
+      if entry.file.gitbutler and entry.file.gitbutler.kind == "unassigned" then
+        table.insert(unassigned_entries, entry)
+      else
+        table.insert(branch_entries, entry)
+      end
+    end
+    add_file_rows("files", branch_entries)
+    if #unassigned_entries > 0 then
+      add_section_header("files", "Unassigned", HL.panel_meta)
+      add_file_rows("files", unassigned_entries)
+    end
+    if #untracked_files > 0 then
+      add_section_header("files", "Untracked", HL.panel_meta)
+      add_file_rows("files", untracked_files)
+    end
+  else
+    add_file_rows("files", tracked_files)
+    if state.scope_mode() == "all" and #untracked_files > 0 then
+      add_section_header("files", "Untracked", HL.panel_meta)
+      add_file_rows("files", untracked_files)
+    end
   end
 
   if #active_files == 0 then

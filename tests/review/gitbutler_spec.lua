@@ -59,7 +59,7 @@ describe("gitbutler adapter", function()
     changes = {
       {
         path = "scratch.lua",
-        status = "added",
+        status = "modified",
         diff = {
           type = "patch",
           hunks = {
@@ -134,6 +134,7 @@ describe("gitbutler adapter", function()
     assert.are.equal("unassigned", unassigned.gitbutler.kind)
     assert.is_true(unassigned.gitbutler.unpublished)
     assert.are.equal("scratch.lua", unassigned.files[1].path)
+    assert.are.equal("A", unassigned.files[1].status)
   end)
 
   it("surfaces GitButler diff failures", function()
