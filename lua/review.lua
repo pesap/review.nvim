@@ -114,6 +114,7 @@ function M._open_with_ref(ref, opts)
     branch = git.current_branch() or "HEAD",
     requested_ref = opts.requested_ref,
     untracked_files = untracked_files,
+    workspace_signature = git.workspace_signature and git.workspace_signature() or nil,
   })
 
   if ref then
@@ -236,8 +237,9 @@ function M.reopen_session()
   M.open(requested_ref and { requested_ref } or {})
 end
 
+---@param workspace_signature string|nil
 ---@return boolean
-function M.refresh_local_session()
+function M.refresh_local_session(workspace_signature)
   local state = require("review.state")
   local s = state.get()
   if not s or s.mode ~= "local" then
@@ -248,6 +250,16 @@ function M.refresh_local_session()
   local diff_mod = require("review.diff")
 
   git.invalidate_cache()
+
+  local previous_commits = s.commits or {}
+  local previous_commit_by_sha = {}
+  for _, commit in ipairs(previous_commits) do
+    previous_commit_by_sha[commit.sha] = commit
+  end
+  local previous_commit_sha = s.current_commit_idx
+      and previous_commits[s.current_commit_idx]
+      and previous_commits[s.current_commit_idx].sha
+    or nil
 
   local diff_ref = s.requested_ref
   if diff_ref == nil and s.base_ref ~= "HEAD" then
@@ -260,8 +272,25 @@ function M.refresh_local_session()
   s.repo_root = git.root()
   s.branch = git.current_branch() or "HEAD"
   s.commits = diff_ref and git.log(diff_ref) or {}
+  s.workspace_signature = workspace_signature or (git.workspace_signature and git.workspace_signature() or nil)
 
-  if s.current_commit_idx and not s.commits[s.current_commit_idx] then
+  local remapped_commit_idx = nil
+  for idx, commit in ipairs(s.commits) do
+    local previous = previous_commit_by_sha[commit.sha]
+    if previous and previous.files ~= nil then
+      commit.files = previous.files
+    end
+    if previous_commit_sha and commit.sha == previous_commit_sha then
+      remapped_commit_idx = idx
+    end
+  end
+
+  if previous_commit_sha then
+    s.current_commit_idx = remapped_commit_idx
+    if not remapped_commit_idx then
+      s.scope_mode = "all"
+    end
+  elseif s.current_commit_idx and not s.commits[s.current_commit_idx] then
     s.current_commit_idx = nil
     s.scope_mode = "all"
   end

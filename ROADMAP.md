@@ -13,4 +13,4 @@
 - [x] Reference other notes.
 - [x] Add a section of published notes vs not published notes. This might
 involve saving temporary notes in lua temoporary path
-- [x] Gitlab support
+- [x] GitLab support

@@ -83,6 +83,7 @@ end
 ---@field draft_comments ReviewComment[]
 ---@field comments_loading boolean|nil
 ---@field ui_state ReviewUIState|nil
+---@field workspace_signature string|nil
 
 ---@class ReviewPR
 ---@field number number
@@ -196,6 +197,8 @@ function M.create(mode, base_ref, files, opts)
     comments_loading = false,
     forge_info = nil,
     ui_state = nil,
+    workspace_signature = opts.workspace_signature
+      or (mode == "local" and git.workspace_signature and git.workspace_signature() or nil),
   }
 
   local loaded = get_storage().load()

@@ -56,6 +56,7 @@ describe("review.ui explorer rail", function()
   local original_open_fugitive_status
   local original_is_gitbutler_workspace
   local original_gitbutler_status_lines
+  local original_workspace_signature
 
   before_each(function()
     original_storage_module = package.loaded["review.storage"]
@@ -85,6 +86,7 @@ describe("review.ui explorer rail", function()
     original_open_fugitive_status = git.open_fugitive_status
     original_is_gitbutler_workspace = git.is_gitbutler_workspace
     original_gitbutler_status_lines = git.gitbutler_status_lines
+    original_workspace_signature = git.workspace_signature
     git.current_branch = function()
       return "feature/rail-polish"
     end
@@ -115,6 +117,9 @@ describe("review.ui explorer rail", function()
     git.gitbutler_status_lines = function()
       return nil, "No GitButler project"
     end
+    git.workspace_signature = function()
+      return "## feature/rail-polish"
+    end
 
     review.setup({})
   end)
@@ -130,6 +135,7 @@ describe("review.ui explorer rail", function()
       git.open_fugitive_status = original_open_fugitive_status
       git.is_gitbutler_workspace = original_is_gitbutler_workspace
       git.gitbutler_status_lines = original_gitbutler_status_lines
+      git.workspace_signature = original_workspace_signature
     end
 
     package.loaded["review.storage"] = original_storage_module
@@ -910,6 +916,45 @@ describe("review.ui help", function()
     assert.is_true(joined:match("Toggle unified/split view") ~= nil)
     assert.is_nil(joined:match("AI Review Focus"))
     assert.is_nil(joined:match("review.nvim"))
+  end)
+
+  it("avoids local session resync during refresh when the workspace is unchanged", function()
+    local review = require("review")
+    local state = require("review.state")
+    local git = require("review.git")
+    local original_refresh_local_session = review.refresh_local_session
+    local original_workspace_signature = git.workspace_signature
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      requested_ref = nil,
+      branch = "feature/rail-polish",
+      repo_root = "/tmp/review-ui-spec",
+      untracked_files = {},
+    })
+    git.workspace_signature = function()
+      return "## feature/rail-polish"
+    end
+    state.get().workspace_signature = "## feature/rail-polish"
+
+    ui.open()
+
+    local calls = 0
+    review.refresh_local_session = function()
+      calls = calls + 1
+      return true
+    end
+
+    ui.refresh()
+
+    assert.are.equal(0, calls)
+
+    review.refresh_local_session = original_refresh_local_session
+    git.workspace_signature = original_workspace_signature
+    if state.get() then
+      pcall(ui.close)
+    end
   end)
 
   it("wraps long help entries on narrow terminals", function()

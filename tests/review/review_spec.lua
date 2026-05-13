@@ -8,6 +8,7 @@ describe("review note export and clearing", function()
   local original_storage_module
   local original_confirm
   local original_setreg
+  local original_workspace_signature
   local copied
 
   before_each(function()
@@ -37,8 +38,12 @@ describe("review note export and clearing", function()
     state = require("review.state")
     git = require("review.git")
     review.setup({})
+    original_workspace_signature = git.workspace_signature
     git.current_branch = function()
       return "feature/export-notes"
+    end
+    git.workspace_signature = function()
+      return "branch feature/export-notes"
     end
     state.create("local", "main", {})
     state.set_forge_info({ forge = "github", pr_number = 12 })
@@ -47,6 +52,9 @@ describe("review note export and clearing", function()
   after_each(function()
     vim.fn.confirm = original_confirm
     vim.fn.setreg = original_setreg
+    if git then
+      git.workspace_signature = original_workspace_signature
+    end
     if state then
       state.destroy()
     end
@@ -350,6 +358,9 @@ describe("review open session metadata", function()
     git_module.current_branch = function()
       return "feature/git-rail"
     end
+    git_module.workspace_signature = function()
+      return "branch feature/export-notes"
+    end
     git_module.diff = function(ref)
       assert.are.equal("main", ref)
       return table.concat({
@@ -378,5 +389,68 @@ describe("review open session metadata", function()
     assert.is_nil(state.get().requested_ref)
     assert.are.equal("lua/new.lua", state.get().files[1].path)
     assert.are.equal(1, #state.get().commits)
+    assert.are.equal("branch feature/export-notes", state.get().workspace_signature)
+  end)
+
+  it("preserves commit identity and cached commit files across local refreshes", function()
+    local git_module = require("review.git")
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = {} },
+    }, {
+      requested_ref = nil,
+      branch = "feature/git-rail",
+      repo_root = "/tmp/review-spec",
+      untracked_files = {},
+    })
+    state.set_commits({
+      {
+        sha = "abc123456789",
+        short_sha = "abc1234",
+        message = "Older commit",
+        author = "psanchez",
+        files = {
+          { path = "lua/kept.lua", status = "M", hunks = {} },
+        },
+      },
+      {
+        sha = "def987654321",
+        short_sha = "def9876",
+        message = "Newer commit",
+        author = "psanchez",
+      },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+
+    git_module.invalidate_cache = function() end
+    git_module.root = function()
+      return "/tmp/review-spec"
+    end
+    git_module.current_branch = function()
+      return "feature/git-rail"
+    end
+    git_module.workspace_signature = function()
+      return "branch feature/git-rail\n M lua/review.lua"
+    end
+    git_module.diff = function(ref)
+      assert.are.equal("main", ref)
+      return ""
+    end
+    git_module.untracked_files = function()
+      return {}
+    end
+    git_module.log = function(ref)
+      assert.are.equal("main", ref)
+      return {
+        { sha = "zzz000000000", short_sha = "zzz0000", message = "Newest commit", author = "psanchez" },
+        { sha = "abc123456789", short_sha = "abc1234", message = "Older commit", author = "psanchez" },
+      }
+    end
+
+    assert.is_true(review.refresh_local_session())
+    assert.are.equal(2, state.get().current_commit_idx)
+    assert.are.equal("abc123456789", state.get().commits[2].sha)
+    assert.are.equal("lua/kept.lua", state.get().commits[2].files[1].path)
   end)
 end)

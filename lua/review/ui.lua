@@ -495,7 +495,16 @@ local function sync_local_review_state()
   if not worktree_git_enabled() then
     return
   end
-  require("review").refresh_local_session()
+  local session = state.get()
+  if not session then
+    return
+  end
+  local git = require("review.git")
+  local workspace_signature = git.workspace_signature and git.workspace_signature() or nil
+  if session.workspace_signature == workspace_signature then
+    return
+  end
+  require("review").refresh_local_session(workspace_signature)
 end
 
 ---@param ui_state ReviewUIState

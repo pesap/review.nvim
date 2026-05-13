@@ -71,6 +71,16 @@ function M.current_branch()
   return out[1]
 end
 
+--- Return a cheap signature for the current workspace state.
+---@return string
+function M.workspace_signature()
+  local out = run_systemlist({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all" })
+  if not out then
+    return ""
+  end
+  return table.concat(out, "\n")
+end
+
 local cached_default_branch = nil
 
 --- Get the default remote branch (origin/main or origin/master, cached).
