@@ -83,6 +83,7 @@ end
 ---@field draft_comments ReviewComment[]
 ---@field comments_loading boolean|nil
 ---@field ui_state ReviewUIState|nil
+---@field workspace_signature string|nil
 
 ---@class ReviewPR
 ---@field number number
@@ -131,6 +132,7 @@ end
 ---@field thread_id number|string|nil  Forge thread ID for replying
 ---@field thread_node_id string|nil  GraphQL node ID for resolve/unresolve (GitHub)
 ---@field resolved boolean|nil  Whether the thread is resolved (remote only)
+---@field outdated boolean|nil  Whether the remote thread is outdated
 
 ---@class ReviewReply
 ---@field author string
@@ -149,6 +151,10 @@ end
 ---@field remote_id number|nil
 
 ---@class ReviewUIState
+---@field files_buf number|nil
+---@field files_win number|nil
+---@field threads_buf number|nil
+---@field threads_win number|nil
 ---@field explorer_buf number|nil
 ---@field explorer_win number|nil
 ---@field diff_buf number|nil
@@ -160,6 +166,7 @@ end
 ---@field tab number|nil
 ---@field explorer_width number|nil
 ---@field view_mode string  "unified"|"split"
+---@field previous_laststatus number|nil
 
 --- Create a new review session.
 ---@param mode "local"|"pr"
@@ -190,6 +197,8 @@ function M.create(mode, base_ref, files, opts)
     comments_loading = false,
     forge_info = nil,
     ui_state = nil,
+    workspace_signature = opts.workspace_signature
+      or (mode == "local" and git.workspace_signature and git.workspace_signature() or nil),
   }
 
   local loaded = get_storage().load()
@@ -520,8 +529,8 @@ function M.note_is_stale(note)
   if note.commit_sha and not M.has_commit(note.commit_sha) then
     return true
   end
-  if note.status == "remote" and session.remote_context_stale then
-    return true
+  if note.status == "remote" then
+    return session.remote_context_stale ~= nil
   end
   if not note_has_known_file(note) then
     return true
@@ -540,10 +549,7 @@ function M.note_in_scope(note)
   end
 
   if note.status == "remote" then
-    if note.is_general then
-      return session.scope_mode == "all"
-    end
-    return note_has_active_file(note)
+    return true
   end
 
   if session.scope_mode == "all" then
@@ -683,6 +689,7 @@ function M.load_remote_comments(comments)
       thread_id = c.thread_id,
       thread_node_id = c.thread_node_id,
       resolved = c.resolved,
+      outdated = c.outdated,
       is_general = c.is_general or false,
     })
     next_note_id = next_note_id + 1

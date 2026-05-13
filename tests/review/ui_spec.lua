@@ -54,6 +54,9 @@ describe("review.ui explorer rail", function()
   local original_branch
   local original_status_sections
   local original_open_fugitive_status
+  local original_is_gitbutler_workspace
+  local original_gitbutler_status_lines
+  local original_workspace_signature
 
   before_each(function()
     original_storage_module = package.loaded["review.storage"]
@@ -81,6 +84,9 @@ describe("review.ui explorer rail", function()
     original_branch = git.current_branch
     original_status_sections = git.status_sections
     original_open_fugitive_status = git.open_fugitive_status
+    original_is_gitbutler_workspace = git.is_gitbutler_workspace
+    original_gitbutler_status_lines = git.gitbutler_status_lines
+    original_workspace_signature = git.workspace_signature
     git.current_branch = function()
       return "feature/rail-polish"
     end
@@ -105,6 +111,15 @@ describe("review.ui explorer rail", function()
         win = vim.api.nvim_get_current_win(),
       }, nil
     end
+    git.is_gitbutler_workspace = function()
+      return false
+    end
+    git.gitbutler_status_lines = function()
+      return nil, "No GitButler project"
+    end
+    git.workspace_signature = function()
+      return "## feature/rail-polish"
+    end
 
     review.setup({})
   end)
@@ -118,6 +133,9 @@ describe("review.ui explorer rail", function()
       git.current_branch = original_branch
       git.status_sections = original_status_sections
       git.open_fugitive_status = original_open_fugitive_status
+      git.is_gitbutler_workspace = original_is_gitbutler_workspace
+      git.gitbutler_status_lines = original_gitbutler_status_lines
+      git.workspace_signature = original_workspace_signature
     end
 
     package.loaded["review.storage"] = original_storage_module
@@ -159,6 +177,7 @@ describe("review.ui explorer rail", function()
     ui.open()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
 
     assert.are.equal(" feature/rail-polish", lines[1])
     assert.are.equal(" against main", lines[2])
@@ -166,11 +185,11 @@ describe("review.ui explorer rail", function()
     assert.are.equal(" Files  +3  -3", lines[4])
     assert.are.equal("no", vim.wo[state.get_ui().explorer_win].signcolumn)
     assert.is_true(lines[5]:match("^  M [^…].*….*lua$") ~= nil)
-    assert.is_true(vim.tbl_contains(lines, " Threads"))
-    assert.is_true(vim.tbl_contains(lines, "   github/"))
-    assert.is_true(vim.tbl_contains(lines, "   local/"))
-    assert.is_true(vim.tbl_contains(lines, "     long…lua [1]"))
-    assert.is_true(vim.tbl_contains(lines, "     revi…lua [1]"))
+    assert.is_true(vim.tbl_contains(thread_lines, " Threads"))
+    assert.is_true(vim.tbl_contains(thread_lines, "   github/"))
+    assert.is_true(vim.tbl_contains(thread_lines, "   local/"))
+    assert.is_true(vim.tbl_contains(thread_lines, "     long…lua [1]"))
+    assert.is_true(vim.tbl_contains(thread_lines, "     revi…lua [1]"))
   end)
 
   it("opens an embedded fugitive pane for worktree reviews", function()
@@ -219,6 +238,70 @@ describe("review.ui explorer rail", function()
     assert.are.equal(ui_state.git_win, vim.api.nvim_get_current_win())
   end)
 
+  it("does not override fugitive keys in the embedded pane", function()
+    review.setup({
+      keymaps = {
+        focus_threads = "t",
+      },
+    })
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.add_note("lua/review.lua", 2, "local draft", nil, "new")
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    send_keys("g")
+    assert.are.equal(ui_state.git_win, vim.api.nvim_get_current_win())
+
+    send_keys("t")
+    assert.are.equal(ui_state.git_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("focuses the first actionable file and thread rows", function()
+    review.setup({
+      keymaps = {
+        focus_files = "F",
+        focus_threads = "T",
+      },
+    })
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/ui.lua", status = "A", hunks = { sample_hunk(4, 4) } },
+    })
+    state.add_note("lua/review.lua", 2, "local draft", nil, "new")
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+
+    send_keys("F")
+    assert.are.equal(ui_state.explorer_win, vim.api.nvim_get_current_win())
+    local file_line = vim.api.nvim_buf_get_lines(
+      ui_state.explorer_buf,
+      vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1] - 1,
+      vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1],
+      false
+    )[1]
+    assert.is_true(file_line:match("^  [A-Z?] ") ~= nil)
+
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    send_keys("T")
+    assert.are.equal(ui_state.threads_win, vim.api.nvim_get_current_win())
+    local thread_line = vim.api.nvim_buf_get_lines(
+      ui_state.threads_buf,
+      vim.api.nvim_win_get_cursor(ui_state.threads_win)[1] - 1,
+      vim.api.nvim_win_get_cursor(ui_state.threads_win)[1],
+      false
+    )[1]
+    assert.is_true(thread_line:match("^     ") ~= nil)
+  end)
+
   it("reuses the left-bottom pane when fugitive opens in another window", function()
     git.open_fugitive_status = function()
       vim.cmd("vsplit")
@@ -246,7 +329,7 @@ describe("review.ui explorer rail", function()
 
     assert.are.equal(explorer_pos[2], git_pos[2])
     assert.is_true(git_pos[1] > explorer_pos[1])
-    assert.are.equal(3, #wins)
+    assert.are.equal(4, #wins)
   end)
 
   it("skips the fugitive pane for explicit ref reviews", function()
@@ -279,6 +362,93 @@ describe("review.ui explorer rail", function()
     assert.are.equal("no", vim.wo[state.get_ui().git_win].signcolumn)
   end)
 
+  it("renders a GitButler status pane for GitButler worktrees", function()
+    git.is_gitbutler_workspace = function()
+      return true
+    end
+    git.gitbutler_status_lines = function()
+      return {
+        "╭┄fu [fugitive-left-rail-stack]",
+        "┊● 1234567 feat(ui): split files and threads in left rail",
+        "┊● abcdef0 (upstream)",
+      }, nil
+    end
+    git.open_fugitive_status = function()
+      error("fugitive should not open for GitButler workspaces")
+    end
+
+    review.setup({
+      keymaps = {
+        focus_threads = "t",
+      },
+    })
+
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.add_note("lua/review.lua", 2, "local draft", nil, "new")
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local lines = vim.api.nvim_buf_get_lines(ui_state.git_buf, 0, -1, false)
+    assert.are.equal("╭┄fu [fugitive-left-rail-stack]", lines[1])
+
+    vim.api.nvim_set_current_win(ui_state.git_win)
+    send_keys("t")
+    assert.are.equal(ui_state.threads_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("shows open, resolved, and outdated unresolved remote threads", function()
+    state.create("local", "main", {
+      { path = "lua/open.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/resolved.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+      { path = "lua/outdated.lua", status = "M", hunks = { sample_hunk(6, 6) } },
+    })
+    state.set_forge_info({ forge = "github", pr_number = 9 })
+
+    state.load_remote_comments({
+      {
+        file_path = "lua/open.lua",
+        line = 2,
+        side = "new",
+        replies = {
+          { body = "open", author = "octocat" },
+        },
+        resolved = false,
+      },
+      {
+        file_path = "lua/resolved.lua",
+        line = 4,
+        side = "new",
+        replies = {
+          { body = "resolved", author = "octocat" },
+        },
+        resolved = true,
+      },
+      {
+        file_path = "lua/outdated.lua",
+        line = 6,
+        side = "new",
+        replies = {
+          { body = "outdated", author = "octocat" },
+        },
+        resolved = false,
+        outdated = true,
+      },
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, "   github/"))
+    assert.is_true(vim.tbl_contains(lines, "   resolved/"))
+    assert.is_true(vim.tbl_contains(lines, "     open.lua [1]"))
+    assert.is_true(vim.tbl_contains(lines, "     outdated.lua [1]") or vim.tbl_contains(lines, "     outd…lua [1]"))
+    assert.is_true(vim.tbl_contains(lines, "     resolved.lua [1]") or vim.tbl_contains(lines, "     reso…lua [1]"))
+    assert.is_false(vim.tbl_contains(lines, " Stale"))
+  end)
+
   it("aligns thread badges within a section", function()
     state.create("local", "main", {
       { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
@@ -309,7 +479,7 @@ describe("review.ui explorer rail", function()
 
     ui.open()
 
-    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     local thread_rows = {}
     for _, line in ipairs(lines) do
       if line:match("^     .+%[%d+%]$") then
@@ -345,9 +515,10 @@ describe("review.ui explorer rail", function()
 
     ui.open()
 
-    local buf = state.get_ui().explorer_buf
-    local ns = vim.api.nvim_create_namespace("review_explorer")
-    local marks = vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })
+    local files_buf = state.get_ui().explorer_buf
+    local files_ns = vim.api.nvim_create_namespace("review_explorer")
+    local marks = vim.api.nvim_buf_get_extmarks(files_buf, files_ns, 0, -1, { details = true })
+    local thread_marks = vim.api.nvim_buf_get_extmarks(state.get_ui().threads_buf, vim.api.nvim_create_namespace("review_threads"), 0, -1, { details = true })
     local groups = {}
     local add_mark
     local del_mark
@@ -362,10 +533,14 @@ describe("review.ui explorer rail", function()
 
     assert.is_true(groups.ReviewStatusADim)
     assert.is_true(groups.ReviewStatusDDim)
-    assert.is_true(groups.ReviewNoteRemote)
-    assert.is_true(groups.ReviewNoteSign)
     assert.are.same({ 8, 10 }, { add_mark[3], add_mark[4].end_col })
     assert.are.same({ 12, 14 }, { del_mark[3], del_mark[4].end_col })
+    local thread_groups = {}
+    for _, mark in ipairs(thread_marks) do
+      thread_groups[mark[4].hl_group] = true
+    end
+    assert.is_true(thread_groups.ReviewNoteRemote)
+    assert.is_true(thread_groups.ReviewNoteSign)
   end)
 
   it("truncates branch and base context to fit the narrow rail", function()
@@ -383,10 +558,37 @@ describe("review.ui explorer rail", function()
     ui.open()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     assert.is_true(vim.fn.strdisplaywidth(lines[1]) <= 20)
     assert.is_true(vim.fn.strdisplaywidth(lines[2]) <= 20)
     assert.is_true(lines[1]:match("…") ~= nil)
     assert.is_true(lines[2]:match("…") ~= nil)
+
+    vim.o.columns = original_columns
+  end)
+
+  it("uses fibonacci rail widths across common column sizes", function()
+    local original_columns = vim.o.columns
+
+    local cases = {
+      { columns = 80, expected = 21 },
+      { columns = 96, expected = 34 },
+      { columns = 170, expected = 55 },
+    }
+
+    for _, case in ipairs(cases) do
+      if state and state.get() then
+        pcall(ui.close)
+      end
+      vim.o.columns = case.columns
+      state.create("local", "main", {
+        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      })
+
+      ui.open()
+
+      assert.are.equal(case.expected, vim.api.nvim_win_get_width(state.get_ui().explorer_win))
+    end
 
     vim.o.columns = original_columns
   end)
@@ -441,6 +643,7 @@ describe("review.ui explorer rail", function()
     ui.open()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     assert.is_true(vim.tbl_contains(lines, " Untracked"))
     assert.is_true(vim.tbl_contains(lines, "  ? scratch.lua") or vim.tbl_contains(lines, "  ? scrat….lua"))
     local scratch_count = 0
@@ -450,12 +653,12 @@ describe("review.ui explorer rail", function()
       end
     end
     assert.are.equal(1, scratch_count)
-    assert.is_true(vim.tbl_contains(lines, " Stale"))
-    assert.is_true(vim.tbl_contains(lines, "   local/"))
+    assert.is_true(vim.tbl_contains(thread_lines, " Stale"))
+    assert.is_true(vim.tbl_contains(thread_lines, "   local/"))
     assert.is_true(
-      vim.tbl_contains(lines, "     missing.lua [1]")
-        or vim.tbl_contains(lines, "     missing.lua [1] @deadbee")
-        or vim.tbl_contains(lines, "     miss…lua [1] @deadbee")
+      vim.tbl_contains(thread_lines, "     missing.lua [1]")
+        or vim.tbl_contains(thread_lines, "     missing.lua [1] @deadbee")
+        or vim.tbl_contains(thread_lines, "     miss…lua [1] @deadbee")
     )
 
     state.set_commits({
@@ -496,7 +699,7 @@ describe("review.ui explorer rail", function()
 
     ui.open()
 
-    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     assert.is_true(vim.tbl_contains(lines, " Stale"))
     assert.is_true(vim.tbl_contains(lines, "   github/"))
     assert.is_true(vim.tbl_contains(lines, "     revi…lua [1]") or vim.tbl_contains(lines, "     review.lua [1]"))
@@ -709,10 +912,49 @@ describe("review.ui help", function()
     assert.is_true(joined:match("Explorer") ~= nil)
     assert.is_true(joined:match("Diff") ~= nil)
     assert.is_true(joined:match("Open file or thread") ~= nil)
-    assert.is_true(joined:match("Focus Fugitive status pane") ~= nil)
+    assert.is_true(joined:match("Focus git status pane") ~= nil)
     assert.is_true(joined:match("Toggle unified/split view") ~= nil)
     assert.is_nil(joined:match("AI Review Focus"))
     assert.is_nil(joined:match("review.nvim"))
+  end)
+
+  it("avoids local session resync during refresh when the workspace is unchanged", function()
+    local review = require("review")
+    local state = require("review.state")
+    local git = require("review.git")
+    local original_refresh_local_session = review.refresh_local_session
+    local original_workspace_signature = git.workspace_signature
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      requested_ref = nil,
+      branch = "feature/rail-polish",
+      repo_root = "/tmp/review-ui-spec",
+      untracked_files = {},
+    })
+    git.workspace_signature = function()
+      return "## feature/rail-polish"
+    end
+    state.get().workspace_signature = "## feature/rail-polish"
+
+    ui.open()
+
+    local calls = 0
+    review.refresh_local_session = function()
+      calls = calls + 1
+      return true
+    end
+
+    ui.refresh()
+
+    assert.are.equal(0, calls)
+
+    review.refresh_local_session = original_refresh_local_session
+    git.workspace_signature = original_workspace_signature
+    if state.get() then
+      pcall(ui.close)
+    end
   end)
 
   it("wraps long help entries on narrow terminals", function()
@@ -905,6 +1147,88 @@ describe("review.ui notes list", function()
     assert.is_true(vim.fn.strdisplaywidth(title) <= cfg.width)
 
     vim.o.columns = original_columns
+  end)
+
+  it("shows remote discussions and remote file comments regardless of current commit scope", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.set_commits({
+      { sha = "abcdef123456", short_sha = "abcdef1", message = "Polish UI", author = "psanchez", files = {
+        { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      } },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+    state.load_remote_comments({
+      {
+        file_path = "ROADMAP.md",
+        line = 16,
+        side = "new",
+        replies = {
+          { body = "remote file comment", author = "octocat", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = false,
+      },
+      {
+        file_path = nil,
+        line = nil,
+        side = nil,
+        replies = {
+          { body = "discussion body", author = "copilot-pull-request-reviewer", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = nil,
+        is_general = true,
+      },
+    })
+
+    ui.open_notes_list()
+
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Open Threads (1)"))
+    assert.is_true(vim.tbl_contains(lines, " Discussion (1)"))
+  end)
+
+  it("keeps the notes list open while refreshing remote comments", function()
+    local original_refresh_comments = review.refresh_comments
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.load_remote_comments({
+      {
+        file_path = "lua/review.lua",
+        line = 2,
+        side = "new",
+        replies = {
+          { body = "resolved", author = "octocat", created_at = "2026-05-11T10:00:00Z" },
+        },
+        resolved = true,
+      },
+    })
+
+    local calls = 0
+    review.refresh_comments = function(opts)
+      calls = calls + 1
+      assert.is_true(opts.preserve_notes_list)
+      state.set_comments_loading(true)
+      ui.refresh_notes_list()
+      state.set_comments_loading(false)
+      ui.refresh_notes_list()
+    end
+
+    ui.open_notes_list()
+    local original_win = vim.api.nvim_get_current_win()
+
+    send_keys("R")
+
+    assert.are.equal(1, calls)
+    assert.is_true(vim.api.nvim_win_is_valid(vim.api.nvim_get_current_win()))
+    assert.are_not.equal(original_win, 0)
+    local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
+    assert.is_true(vim.tbl_contains(lines, " Resolved (1)"))
+
+    review.refresh_comments = original_refresh_comments
   end)
 
   it("falls back to a minimal notes title on extremely narrow floats", function()
@@ -1118,6 +1442,44 @@ describe("review.ui statusline", function()
     assert.is_nil(statusline:match("compare:"))
 
     vim.o.columns = original_columns
+  end)
+
+  it("suppresses inherited statuslines in the left rail", function()
+    local original_global = vim.o.statusline
+    vim.o.statusline = "GLOBAL-STATUSLINE"
+
+    state.create("local", "origin/main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    assert.are.equal(" ", vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.explorer_win }))
+    if ui_state.git_win and vim.api.nvim_win_is_valid(ui_state.git_win) then
+      local git_statusline = vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.git_win })
+      assert.is_true(git_statusline == " " or git_statusline == "")
+    end
+
+    vim.o.statusline = original_global
+  end)
+end)
+
+describe("review.ui highlights", function()
+  local review = require("review")
+
+  it("keeps modified files distinct from local note/thread accents in colorblind mode", function()
+    review.setup({ colorblind = true })
+
+    local status_m = vim.api.nvim_get_hl(0, { name = "ReviewStatusM", link = false })
+    local note_sign = vim.api.nvim_get_hl(0, { name = "ReviewNoteSign", link = false })
+    local local_group = vim.api.nvim_get_hl(0, { name = "ReviewLocalGroup", link = false })
+
+    assert.is_not_nil(status_m.fg)
+    assert.is_not_nil(note_sign.fg)
+    assert.is_not_nil(local_group.fg)
+    assert.are_not.equal(status_m.fg, note_sign.fg)
+    assert.are_equal(note_sign.fg, local_group.fg)
   end)
 end)
 

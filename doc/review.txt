@@ -20,7 +20,7 @@ dual-panel layout for reviewing git diffs with inline notes.
 
 Features:
 - Dual-panel layout: file explorer + diff viewer
-- Embedded Fugitive status pane for worktree reviews
+- Embedded Git status pane for worktree reviews
 - Unified and side-by-side split diff views
 - Word-level diff highlighting
 - Explicit review scopes: All, Current Commit, and Select Commit
@@ -145,7 +145,7 @@ Explorer panel:~
     ?           Open review help.
     T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section.
-    g           Focus the Fugitive status pane.
+    g           Focus the git status pane.
     t           Focus the Threads section.
     q           Close the full review layout.
 
@@ -167,15 +167,18 @@ Diff viewer:~
     s           Toggle between unified and side-by-side split view.
     T           Cycle between `All`, `Current Commit`, and `Select Commit`.
     f           Focus the Files section in the explorer.
-    g           Focus the Fugitive status pane.
+    g           Focus the git status pane.
     t           Focus the Threads section in the explorer.
     q           Close the full review layout.
 
-Fugitive pane:~
+Git status pane:~
 
+    Git repos use Fugitive here:
     -           Stage or unstage the entry under the cursor.
     cc          Create a commit.
     A           Stage all changes.
+
+    GitButler workspaces show the current GitButler status in a read-only pane.
     q           Close the full review layout.
 
 Notes list (N):~
@@ -230,8 +233,10 @@ Explorer threads~
 
 The explorer keeps `Files` and `Threads` separate and shows the active
 `Scope` explicitly. In local worktree reviews opened without an explicit
-ref, review.nvim embeds a Fugitive status pane below the explorer in the
-left rail. Press `g` to jump to it. Remote threads and local notes are
+ref, review.nvim embeds a Git status pane below the explorer in the left
+rail. Press `g` to jump to it. Standard Git repos use Fugitive there,
+while GitButler workspaces show the current GitButler status in a
+read-only pane. Remote threads and local notes are
 grouped under source labels such as `github/`, `gitlab/`, and `local/`,
 and selecting a thread entry jumps to the related diff location.
 

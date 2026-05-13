@@ -7,7 +7,7 @@ Minimal code review plugin for Neovim.
 ## What it does
 
 - Dual-panel layout (file explorer + diff viewer) in its own tab
-- Embedded Fugitive status pane for worktree reviews
+- Embedded Git status pane for worktree reviews
 - Unified and side-by-side split views
 - Word-level diff highlighting
 - Explicit review scope modes: `All`, `Current Commit`, and `Select Commit`
@@ -136,10 +136,13 @@ The left rail shows the active `Scope` explicitly:
 - `select · <sha>` while browsing commits directly from the rail
 
 In local worktree reviews opened without an explicit ref, review.nvim embeds a
-Fugitive status pane below the explorer in the left rail. Press `g` to jump to
-it. That pane uses
-your normal Fugitive keymaps and actions, but inherits review.nvim's window
-theme so it feels like part of the same layout.
+Git status pane below the explorer in the left rail. Press `g` to jump to it.
+Standard Git repos use Fugitive there, with review.nvim's window theme applied
+so it feels like part of the same layout.
+
+If the repository is set up with GitButler, review.nvim shows a read-only
+GitButler status pane there instead of embedding Fugitive write actions inside
+that workspace.
 
 If Fugitive is not installed, review.nvim shows a small themed placeholder pane
 instead of failing the whole review UI.
@@ -162,15 +165,14 @@ Diff viewer:
 | `s`         | toggle split                       |
 | `T`         | cycle `All` -> `Current Commit` -> `Select Commit` |
 | `f`         | focus the Files section            |
-| `g`         | focus the Fugitive pane            |
+| `g`         | focus the git status pane          |
 | `t`         | focus the Threads section          |
 | `q`         | close full review                  |
 
-Fugitive pane:
+Git status pane:
 
-- `-` stage or unstage the entry under the cursor
-- `cc` create a commit
-- `A` stage all changes
+- In standard Git repos: `-` stages or unstages the entry under the cursor, `cc` creates a commit, and `A` stages all changes
+- In GitButler repos: review.nvim shows the current GitButler status output in a read-only pane
 - `q` closes the full review layout through review.nvim
 
 Commands:
