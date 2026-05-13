@@ -184,7 +184,8 @@ describe("review.ui explorer rail", function()
     assert.are.equal(" Scope  all", lines[3])
     assert.are.equal(" Files  +3  -3", lines[4])
     assert.are.equal("no", vim.wo[state.get_ui().explorer_win].signcolumn)
-    assert.is_true(lines[5]:match("^  M [^…].*….*lua$") ~= nil)
+    assert.is_true(lines[5]:match("^  M lua/.*….*lua$") ~= nil)
+    assert.is_true(vim.wo[state.get_ui().diff_win].winbar:find("lua/review.lua", 1, true) ~= nil)
     assert.is_true(vim.tbl_contains(thread_lines, " Threads"))
     assert.is_true(vim.tbl_contains(thread_lines, "   github/"))
     assert.is_true(vim.tbl_contains(thread_lines, "   local/"))
@@ -645,10 +646,9 @@ describe("review.ui explorer rail", function()
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     assert.is_true(vim.tbl_contains(lines, " Untracked"))
-    assert.is_true(vim.tbl_contains(lines, "  ? scratch.lua") or vim.tbl_contains(lines, "  ? scrat….lua"))
     local scratch_count = 0
     for _, line in ipairs(lines) do
-      if line == "  ? scratch.lua" or line == "  ? scrat….lua" then
+      if line:match("^  %? lua/.*%.lua$") then
         scratch_count = scratch_count + 1
       end
     end

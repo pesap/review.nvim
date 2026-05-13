@@ -979,6 +979,27 @@ local function compact_active_commit_label(max_width)
   return truncate_end_text(variants[#variants], max_width)
 end
 
+---@param text string
+---@return string
+local function statusline_escape(text)
+  return tostring(text or ""):gsub("%%", "%%%%")
+end
+
+---@param file ReviewFile
+---@return string
+local function build_diff_winbar(file)
+  return table.concat({
+    "%#",
+    HL.panel_meta,
+    "# File: ",
+    "%#",
+    HL.explorer_path,
+    "#",
+    statusline_escape(file.path),
+    " ",
+  })
+end
+
 ---@param file ReviewFile
 ---@param width number
 ---@return string
@@ -993,7 +1014,7 @@ local function build_diff_statusline(file, width)
   local right_width = vim.fn.strdisplaywidth(right_text)
   local counts_width = vim.fn.strdisplaywidth(" +" .. additions .. " -" .. deletions .. " ")
   local left_budget = math.max(width - right_width - counts_width - 6, 12)
-  local path_label = truncate_middle_text(file.path, left_budget)
+  local path_label = statusline_escape(truncate_middle_text(file.path, left_budget))
 
   return table.concat({
     "%#",
@@ -1050,11 +1071,9 @@ end
 local function sorted_file_entries(files)
   local entries = {}
   for idx, file in ipairs(files) do
-    local parts = vim.split(file.path, "/", { plain = true })
     table.insert(entries, {
       idx = idx,
       file = file,
-      basename = parts[#parts] or file.path,
     })
   end
 
@@ -1429,19 +1448,21 @@ local function update_window_chrome()
   end
 
   if ui_state.diff_win and vim.api.nvim_win_is_valid(ui_state.diff_win) then
-    vim.wo[ui_state.diff_win].winbar = ""
     if file then
+      vim.wo[ui_state.diff_win].winbar = build_diff_winbar(file)
       vim.wo[ui_state.diff_win].statusline = build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.diff_win))
     else
+      vim.wo[ui_state.diff_win].winbar = ""
       vim.wo[ui_state.diff_win].statusline = ""
     end
   end
   if ui_state.split_win and vim.api.nvim_win_is_valid(ui_state.split_win) then
-    vim.wo[ui_state.split_win].winbar = ""
     if file then
+      vim.wo[ui_state.split_win].winbar = build_diff_winbar(file)
       vim.wo[ui_state.split_win].statusline =
         build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.split_win))
     else
+      vim.wo[ui_state.split_win].winbar = ""
       vim.wo[ui_state.split_win].statusline = ""
     end
   end
@@ -1623,8 +1644,8 @@ local function render_files_pane(buf)
     for _, entry in ipairs(entries) do
       local file = entry.file
       local is_active = (entry.idx == s.current_file_idx)
-      local basename = truncate_middle_text(entry.basename, math.max(row_budget - 4, 8))
-      local line = string.format("%s%s %s", file_indent, file.status, basename)
+      local path_label = truncate_middle_text(file.path, math.max(row_budget - 4, 8))
+      local line = string.format("%s%s %s", file_indent, file.status, path_label)
 
       table.insert(lines, line)
       table.insert(files_line_map, { type = "file", idx = entry.idx, section = section })
@@ -1645,13 +1666,13 @@ local function render_files_pane(buf)
         col_end = 3,
       })
 
-      local basename_col = line:find(basename, 1, true)
-      if basename_col then
+      local path_col = line:find(path_label, 1, true)
+      if path_col then
         table.insert(highlights, {
           line = li,
           hl = is_active and HL.explorer_active or HL.explorer_file,
-          col_start = basename_col - 1,
-          col_end = basename_col - 1 + #basename,
+          col_start = path_col - 1,
+          col_end = path_col - 1 + #path_label,
         })
       end
     end
