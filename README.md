@@ -43,6 +43,7 @@ lazy.nvim:
 ```lua
 {
   "pesap/review.nvim",
+  branch = "main", -- optional: track the main branch explicitly
   dependencies = { "tpope/vim-fugitive" },
   config = function()
     require("review").setup()
