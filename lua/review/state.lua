@@ -63,9 +63,11 @@ end
 ---@field message string
 ---@field author string
 ---@field files ReviewFile[]|nil  Lazily loaded per-commit files
+---@field gitbutler table|nil
 
 ---@class ReviewSession
 ---@field mode "local"|"pr"
+---@field vcs "git"|"gitbutler"|nil
 ---@field repo_root string|nil
 ---@field branch string|nil
 ---@field requested_ref string|nil
@@ -82,6 +84,7 @@ end
 ---@field notes ReviewNote[]
 ---@field draft_comments ReviewComment[]
 ---@field comments_loading boolean|nil
+---@field gitbutler table|nil
 ---@field ui_state ReviewUIState|nil
 ---@field workspace_signature string|nil
 
@@ -98,6 +101,8 @@ end
 ---@field path string
 ---@field status string  "M"|"A"|"D"|"R"|"?"
 ---@field untracked boolean|nil
+---@field gitbutler table|nil
+---@field gitbutler_unassigned boolean|nil
 ---@field hunks ReviewHunk[]
 
 ---@class ReviewHunk
@@ -133,6 +138,7 @@ end
 ---@field thread_node_id string|nil  GraphQL node ID for resolve/unresolve (GitHub)
 ---@field resolved boolean|nil  Whether the thread is resolved (remote only)
 ---@field outdated boolean|nil  Whether the remote thread is outdated
+---@field gitbutler table|nil GitButler note scope metadata
 
 ---@class ReviewReply
 ---@field author string
@@ -179,6 +185,7 @@ function M.create(mode, base_ref, files, opts)
   local git = require("review.git")
   session = {
     mode = mode,
+    vcs = opts.vcs or "git",
     repo_root = opts.repo_root or git.root(),
     branch = opts.branch or git.current_branch() or "HEAD",
     requested_ref = opts.requested_ref,
@@ -196,6 +203,7 @@ function M.create(mode, base_ref, files, opts)
     draft_comments = {},
     comments_loading = false,
     forge_info = nil,
+    gitbutler = opts.gitbutler,
     ui_state = nil,
     workspace_signature = opts.workspace_signature
       or (mode == "local" and git.workspace_signature and git.workspace_signature() or nil),
@@ -320,6 +328,11 @@ function M.current_commit()
   return session.commits[session.current_commit_idx]
 end
 
+---@return boolean
+function M.is_gitbutler()
+  return session ~= nil and session.vcs == "gitbutler"
+end
+
 --- Select a commit by index (nil = show all changes).
 ---@param idx number|nil
 function M.set_commit(idx)
@@ -419,6 +432,33 @@ function M.has_commit(sha)
   return false
 end
 
+---@param note ReviewNote
+---@return boolean
+local function has_gitbutler_scope(note)
+  if not session or not note.gitbutler then
+    return true
+  end
+  local note_gb = note.gitbutler
+  for _, commit in ipairs(session.commits or {}) do
+    local gb = commit.gitbutler or {}
+    if note_gb.kind == gb.kind then
+      if note_gb.kind == "unassigned" then
+        return true
+      end
+      if note_gb.branch_cli_id and note_gb.branch_cli_id == gb.branch_cli_id then
+        return true
+      end
+      if note_gb.branch_name and note_gb.branch_name == gb.branch_name then
+        return true
+      end
+    end
+    if note.commit_sha and commit.sha == note.commit_sha then
+      return true
+    end
+  end
+  return false
+end
+
 ---@return string|nil, string|nil
 function M.context_signature()
   if not session then
@@ -434,6 +474,18 @@ function M.session_matches_git()
   end
   local git = require("review.git")
   return session.repo_root == git.root() and session.branch == (git.current_branch() or "HEAD")
+end
+
+---@return boolean
+function M.session_matches_vcs()
+  if not session then
+    return true
+  end
+  if session.vcs == "gitbutler" then
+    local gitbutler = require("review.gitbutler")
+    return session.repo_root == require("review.git").root() and gitbutler.is_workspace()
+  end
+  return M.session_matches_git()
 end
 
 ---@param reason string|nil
@@ -471,6 +523,7 @@ function M.add_note(file_path, line, body, end_line, side, note_type)
     status = "draft",
     commit_sha = commit and commit.sha or nil,
     commit_short_sha = commit and commit.short_sha or nil,
+    gitbutler = commit and commit.gitbutler and vim.deepcopy(commit.gitbutler) or nil,
     url = nil,
   }
   next_note_id = next_note_id + 1
@@ -525,6 +578,9 @@ end
 function M.note_is_stale(note)
   if not session then
     return false
+  end
+  if session.vcs == "gitbutler" and not has_gitbutler_scope(note) then
+    return true
   end
   if note.commit_sha and not M.has_commit(note.commit_sha) then
     return true

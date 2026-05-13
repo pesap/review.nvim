@@ -363,7 +363,7 @@ end
 ---@param buf number
 ---@param lines string[]|nil
 ---@param err string|nil
-local function render_gitbutler_buffer(buf, lines, err)
+local function render_gitbutler_status_buffer(buf, lines, err)
   local content = lines
   if not content or #content == 0 then
     content = {
@@ -491,6 +491,92 @@ local function setup_git_keymaps(buf, opts)
   end, keymap_opts)
 end
 
+---@param value any
+---@return string
+local function fmt_value(value)
+  if value == nil or value == vim.NIL or value == "" then
+    return "-"
+  end
+  return tostring(value)
+end
+
+---@param buf number
+local function render_gitbutler_buffer(buf)
+  local s = state.get()
+  local gb = s and s.gitbutler or nil
+  local lines = { " GitButler workspace" }
+
+  if not gb then
+    table.insert(lines, "")
+    table.insert(lines, " No GitButler metadata available.")
+  else
+    local merge = gb.mergeBase or {}
+    local upstream = gb.upstreamState or {}
+    table.insert(lines, string.format(" base: %s", fmt_value((merge.commitId or ""):sub(1, 7))))
+    if upstream.behind then
+      table.insert(lines, string.format(" upstream: behind %s", tostring(upstream.behind)))
+    end
+
+    if gb.unassignedChanges and #gb.unassignedChanges > 0 then
+      table.insert(lines, "")
+      table.insert(lines, " unassigned")
+      for _, change in ipairs(gb.unassignedChanges) do
+        table.insert(
+          lines,
+          string.format("  %s %s %s", fmt_value(change.cliId), fmt_value(change.changeType), fmt_value(change.filePath))
+        )
+      end
+    end
+
+    for _, stack in ipairs(gb.stacks or {}) do
+      table.insert(lines, "")
+      table.insert(lines, " stack " .. fmt_value(stack.cliId))
+      for _, branch in ipairs(stack.branches or {}) do
+        local review = branch.reviewId and branch.reviewId ~= vim.NIL and (" PR/MR #" .. tostring(branch.reviewId))
+          or " unpublished"
+        table.insert(
+          lines,
+          string.format(
+            "  %s %s [%s]%s",
+            fmt_value(branch.cliId),
+            fmt_value(branch.name),
+            fmt_value(branch.branchStatus),
+            review
+          )
+        )
+        for _, commit in ipairs(branch.commits or {}) do
+          table.insert(
+            lines,
+            string.format("    %s %s", fmt_value((commit.commitId or ""):sub(1, 7)), fmt_value(commit.message))
+          )
+        end
+      end
+    end
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, " read-only: use `but` or GitButler to mutate stacks")
+
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+
+  local ns = vim.api.nvim_create_namespace("review_gitbutler_pane")
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  for idx, line in ipairs(lines) do
+    local li = idx - 1
+    if line:match("^ GitButler") then
+      vim.api.nvim_buf_add_highlight(buf, ns, HL.panel_title, li, 1, -1)
+    elseif line:match("^ stack") or line:match("^ unassigned") then
+      vim.api.nvim_buf_add_highlight(buf, ns, HL.vendor_group, li, 1, -1)
+    elseif line:match("unpublished") then
+      vim.api.nvim_buf_add_highlight(buf, ns, HL.note_draft, li, 0, -1)
+    elseif line:match("^ read%-only") then
+      vim.api.nvim_buf_add_highlight(buf, ns, HL.meta, li, 1, -1)
+    end
+  end
+end
+
 local function sync_local_review_state()
   if not worktree_git_enabled() then
     return
@@ -566,16 +652,32 @@ local function ensure_git_status_pane(ui_state)
   local git_win = vim.api.nvim_get_current_win()
   apply_git_window_style(git_win)
 
-  if git_mod.is_gitbutler_workspace and git_mod.is_gitbutler_workspace() then
-    local gitbutler_buf = create_buf("review://gitbutler", { filetype = "review-git" })
-    local lines, err = git_mod.gitbutler_status_lines()
-    vim.api.nvim_win_set_buf(git_win, gitbutler_buf)
-    render_gitbutler_buffer(gitbutler_buf, lines, err)
+  if state.is_gitbutler() then
+    local buf = create_buf("review://gitbutler", { filetype = "review-gitbutler" })
+    vim.api.nvim_win_set_buf(git_win, buf)
+    render_gitbutler_buffer(buf)
     ui_state.git_win = git_win
-    ui_state.git_buf = gitbutler_buf
-    vim.b[gitbutler_buf].review_git_pane = true
-    setup_git_keymaps(gitbutler_buf, { allow_navigation = true })
-    attach_review_quit_guard(gitbutler_buf)
+    ui_state.git_buf = buf
+    vim.b[buf].review_git_pane = true
+    setup_git_keymaps(buf, { allow_navigation = true })
+    attach_review_quit_guard(buf)
+    rebalance_left_rail(ui_state)
+    if vim.api.nvim_win_is_valid(original_win) then
+      vim.api.nvim_set_current_win(original_win)
+    end
+    return
+  end
+
+  if git_mod.is_gitbutler_workspace and git_mod.is_gitbutler_workspace() then
+    local buf = create_buf("review://gitbutler", { filetype = "review-git" })
+    local lines, err = git_mod.gitbutler_status_lines()
+    vim.api.nvim_win_set_buf(git_win, buf)
+    render_gitbutler_status_buffer(buf, lines, err)
+    ui_state.git_win = git_win
+    ui_state.git_buf = buf
+    vim.b[buf].review_git_pane = true
+    setup_git_keymaps(buf, { allow_navigation = true })
+    attach_review_quit_guard(buf)
     rebalance_left_rail(ui_state)
     if vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
@@ -912,6 +1014,15 @@ end
 local function navigator_context_lines()
   local git = require("review.git")
   local session = state.get()
+  if session and session.vcs == "gitbutler" then
+    local max_width = math.max(current_navigator_width() - 1, 8)
+    local branch_line = format_context_line(" ", "GitButler workspace", max_width)
+    local upstream = session.gitbutler and session.gitbutler.upstreamState
+    if upstream and upstream.behind then
+      return branch_line, format_context_line(" behind ", tostring(upstream.behind) .. " upstream commit(s)", max_width)
+    end
+    return branch_line, nil
+  end
   local branch = git.current_branch() or "HEAD"
   local base = session and session.base_ref or nil
   local max_width = math.max(current_navigator_width() - 1, 8)
@@ -935,8 +1046,18 @@ local function compact_compare_label(max_width)
   local base = session.base_ref or "HEAD"
   local head = git.current_branch() or "HEAD"
   local commit = state.current_commit()
+  if state.is_gitbutler() then
+    base = "GitButler"
+    head = "workspace"
+  end
   if commit then
-    head = commit.short_sha
+    if commit.gitbutler and commit.gitbutler.kind == "branch" then
+      head = commit.gitbutler.branch_name or commit.message
+    elseif commit.gitbutler and commit.gitbutler.kind == "unassigned" then
+      head = "unassigned"
+    else
+      head = commit.short_sha
+    end
   end
 
   local variants = {
@@ -961,8 +1082,18 @@ local function compact_active_commit_label(max_width)
   local variants
   if not commit then
     variants = {
-      "Current stack",
-      "stack",
+      state.is_gitbutler() and "GitButler stack" or "Current stack",
+      state.is_gitbutler() and "gb stack" or "stack",
+    }
+  elseif commit.gitbutler and commit.gitbutler.kind == "branch" then
+    variants = {
+      string.format("branch %s", commit.gitbutler.branch_name or commit.message),
+      commit.gitbutler.branch_name or commit.message,
+    }
+  elseif commit.gitbutler and commit.gitbutler.kind == "unassigned" then
+    variants = {
+      "unassigned changes",
+      "unassigned",
     }
   else
     variants = {
@@ -1095,6 +1226,17 @@ local function active_scope_label()
     return mode == "select_commit" and "select" or "current"
   end
 
+  if commit.gitbutler and commit.gitbutler.kind == "branch" then
+    local detail = commit.gitbutler.branch_name or commit.message
+    if mode == "select_commit" then
+      return "select branch · " .. detail
+    end
+    return "branch · " .. detail
+  end
+  if commit.gitbutler and commit.gitbutler.kind == "unassigned" then
+    return mode == "select_commit" and "select · unassigned" or "unassigned"
+  end
+
   local detail = string.format("%s %s", commit.short_sha, commit.message)
   if mode == "select_commit" then
     return "select · " .. detail
@@ -1113,11 +1255,23 @@ local function scope_picker_rows()
     { type = "scope_all", label = "all" },
   }
   for idx, commit in ipairs(s.commits) do
+    local label
+    if commit.gitbutler and commit.gitbutler.kind == "branch" then
+      label = string.format(
+        "%s  %s",
+        commit.gitbutler.branch_cli_id or commit.short_sha,
+        commit.gitbutler.branch_name or commit.message
+      )
+    elseif commit.gitbutler and commit.gitbutler.kind == "unassigned" then
+      label = "unassigned  changes"
+    else
+      label = string.format("%s  %s", commit.short_sha, commit.message)
+    end
     table.insert(rows, {
       type = "commit",
       idx = idx,
       commit = commit,
-      label = string.format("%s  %s", commit.short_sha, commit.message),
+      label = label,
     })
   end
   return rows
@@ -1136,6 +1290,13 @@ local function note_visible_in_file(note, file)
     return old_to_display[note.line] ~= nil
   end
   return new_to_display[note.line] ~= nil
+end
+
+---@param note ReviewNote
+---@return boolean
+local function note_is_gitbutler_unpublished(note)
+  return note and note.gitbutler and (note.gitbutler.unpublished == true or note.gitbutler.kind == "unassigned")
+    or false
 end
 
 ---@param active_files ReviewFile[]
@@ -2462,7 +2623,7 @@ function M.select_commit(idx, opts)
   -- If selecting a specific commit, lazily load its files
   if idx ~= nil then
     local commit = s.commits[idx]
-    if commit and not commit.files then
+    if commit and not commit.files and not commit.gitbutler then
       local git = require("review.git")
       local diff_text = git.commit_diff(commit.sha)
       commit.files = diff_mod.parse(diff_text)
@@ -3896,6 +4057,9 @@ function M.open_notes_list(opts)
     if note.status == "staged" then
       table.insert(meta_parts, "staged")
     end
+    if note_is_gitbutler_unpublished(note) then
+      table.insert(meta_parts, "unpublished")
+    end
     local meta = table.concat(meta_parts, "  ")
     local meta_dw = #meta > 0 and (dw(meta) + 2) or 0
 
@@ -4121,6 +4285,26 @@ function M.open_notes_list(opts)
       reopen_notes_list(list_win)
       M.refresh()
       return
+    end
+
+    local publishable_notes = {}
+    local blocked = {}
+    for _, note in ipairs(staged_notes) do
+      if note_is_gitbutler_unpublished(note) then
+        table.insert(blocked, note)
+      else
+        table.insert(publishable_notes, note)
+      end
+    end
+    if #blocked > 0 then
+      vim.notify(
+        "This note is on an unpublished GitButler change. Commit and push the branch before publishing.",
+        vim.log.levels.WARN
+      )
+      if #publishable_notes == 0 then
+        return
+      end
+      staged_notes = publishable_notes
     end
 
     vim.notify(
@@ -4452,7 +4636,7 @@ function M.open_help()
   add_item(km.help, "Open this help")
   add_item(km.notes_list, "Open notes list")
   add_item(km.focus_files, "Focus Files section")
-  add_item(km.focus_git, "Focus git status pane")
+  add_item(km.focus_git, "Focus Git/Fugitive/GitButler pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
   add_item("<CR>", "Open file or thread")
@@ -4473,7 +4657,7 @@ function M.open_help()
   add_item(km.prev_note, "Previous note")
   add_item(km.toggle_split, "Toggle unified/split view")
   add_item(km.focus_files, "Focus Files section")
-  add_item(km.focus_git, "Focus git status pane")
+  add_item(km.focus_git, "Focus Git/Fugitive/GitButler pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
   add_item(km.notes_list, "Open notes list")
@@ -4482,12 +4666,14 @@ function M.open_help()
   add_item("<CR>", "Open thread or edit note under cursor")
 
   if worktree_git_enabled() then
-    add_section("Git")
-    add_item(km.focus_git, "Jump to the embedded git status pane")
-    if require("review.git").is_gitbutler_workspace() then
+    if state.is_gitbutler() then
+      add_section("GitButler")
+      add_item(km.focus_git, "Jump to the read-only GitButler workspace pane")
       add_item(km.focus_files, "Jump back to the Files section")
       add_item(km.focus_threads, "Jump to the Threads section")
     else
+      add_section("Git")
+      add_item(km.focus_git, "Jump to the embedded Fugitive status pane")
       add_item("-", "Fugitive stage or unstage under cursor")
       add_item("cc", "Fugitive create commit")
       add_item("A", "Fugitive stage all changes")
@@ -4512,7 +4698,7 @@ end
 
 --- Refresh both panels (call after state changes).
 function M.refresh()
-  if not state.session_matches_git() then
+  if not state.session_matches_vcs() then
     require("review").reopen_session()
     return
   end
@@ -4523,6 +4709,9 @@ function M.refresh()
     return
   end
   ensure_git_status_pane(ui_state)
+  if state.is_gitbutler() and ui_state.git_buf and vim.api.nvim_buf_is_valid(ui_state.git_buf) then
+    render_gitbutler_buffer(ui_state.git_buf)
+  end
   if ui_state.files_buf and vim.api.nvim_buf_is_valid(ui_state.files_buf) then
     render_files_pane(ui_state.files_buf)
     local selection_line = navigator_selection_line()

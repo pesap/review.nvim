@@ -52,6 +52,17 @@ function M.check()
 
   if git.root() then
     vim.health.ok("Current directory is a git repository")
+    local gitbutler = require("review.gitbutler")
+    if gitbutler.available() then
+      vim.health.ok("but CLI is installed")
+      if gitbutler.is_workspace() then
+        vim.health.ok("GitButler workspace detected")
+      else
+        vim.health.info("GitButler workspace not detected")
+      end
+    else
+      vim.health.info("but CLI is not installed")
+    end
     if remote then
       vim.health.ok("Detected forge: " .. remote.forge .. " (" .. remote.owner .. "/" .. remote.repo .. ")")
     else
