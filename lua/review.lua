@@ -84,6 +84,74 @@ local function hydrate_cached_remote_bundle(base_ref)
   return true
 end
 
+---@param opts table|nil
+---@return boolean
+local function open_gitbutler_workspace(opts)
+  opts = opts or {}
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+  local state = require("review.state")
+  local ui = require("review.ui")
+
+  local review_data, err = gitbutler.workspace_review()
+  if not review_data then
+    vim.notify("Could not read GitButler workspace: " .. (err or "unknown"), vim.log.levels.WARN)
+    return false
+  end
+  if #review_data.files == 0 then
+    vim.notify("No GitButler changes to review", vim.log.levels.INFO)
+    return false
+  end
+
+  local base_ref = review_data.metadata and review_data.metadata.mergeBase and review_data.metadata.mergeBase.commitId
+    or "gitbutler/workspace"
+  state.create("local", base_ref, review_data.files, {
+    vcs = "gitbutler",
+    repo_root = git.root(),
+    branch = git.current_branch() or "gitbutler/workspace",
+    requested_ref = opts.requested_ref,
+    untracked_files = review_data.untracked_files or {},
+    gitbutler = review_data.metadata,
+  })
+  state.set_commits(review_data.commits or {})
+
+  local review_ids = {}
+  for _, commit in ipairs(review_data.commits or {}) do
+    local gb = commit.gitbutler
+    if gb and gb.review_id then
+      review_ids[tostring(gb.review_id)] = gb.review_id
+    end
+  end
+  local single_review_id = nil
+  local review_count = 0
+  for _, review_id in pairs(review_ids) do
+    single_review_id = review_id
+    review_count = review_count + 1
+  end
+  local remote = git.parse_remote()
+  local has_single_forge_review = false
+  local numeric_review_id = tonumber(single_review_id)
+  if review_count == 1 and remote and numeric_review_id then
+    state.set_forge_info({
+      forge = remote.forge,
+      owner = remote.owner,
+      repo = remote.repo,
+      pr_number = numeric_review_id,
+    })
+    has_single_forge_review = true
+    hydrate_cached_remote_bundle(base_ref)
+  end
+
+  if opts.open_ui ~= false then
+    ui.open()
+    if has_single_forge_review then
+      M.refresh_comments()
+    end
+  end
+
+  return true
+end
+
 ---@param ref string|nil
 ---@param opts table|nil
 ---@return boolean
@@ -91,9 +159,15 @@ function M._open_with_ref(ref, opts)
   opts = opts or {}
 
   local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
   local diff_mod = require("review.diff")
   local state = require("review.state")
   local ui = require("review.ui")
+
+  if not ref and gitbutler.is_workspace() then
+    return open_gitbutler_workspace(opts)
+  end
+
   local diff_text = git.diff(ref)
   if diff_text == "" then
     vim.notify("No changes to review" .. (ref and (" against " .. ref) or ""), vim.log.levels.INFO)
@@ -144,6 +218,7 @@ function M.open(args)
   local ui = require("review.ui")
 
   git.invalidate_cache()
+  require("review.gitbutler").invalidate_cache()
 
   -- Close any existing session
   if state.get() then
@@ -248,8 +323,34 @@ function M.refresh_local_session(workspace_signature)
 
   local git = require("review.git")
   local diff_mod = require("review.diff")
+  local gitbutler = require("review.gitbutler")
 
   git.invalidate_cache()
+  gitbutler.invalidate_cache()
+
+  if s.vcs == "gitbutler" then
+    local review_data = gitbutler.workspace_review()
+    if not review_data then
+      return false
+    end
+    s.files = review_data.files
+    s.untracked_files = review_data.untracked_files or {}
+    s.repo_root = git.root()
+    s.branch = git.current_branch() or "gitbutler/workspace"
+    s.gitbutler = review_data.metadata
+    s.commits = review_data.commits or {}
+    if s.current_commit_idx and not s.commits[s.current_commit_idx] then
+      s.current_commit_idx = nil
+      s.scope_mode = "all"
+    end
+    local active_files = state.active_files()
+    if #active_files == 0 then
+      s.current_file_idx = 1
+    else
+      s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
+    end
+    return true
+  end
 
   local previous_commits = s.commits or {}
   local previous_commit_by_sha = {}
@@ -325,7 +426,8 @@ function M.refresh_comments(opts)
   local forge = require("review.forge")
   local git = require("review.git")
   git.invalidate_cache()
-  if not state.session_matches_git() then
+  require("review.gitbutler").invalidate_cache()
+  if not state.session_matches_vcs() then
     M.reopen_session()
     return
   end
@@ -451,6 +553,9 @@ local function export_note_meta(note)
   if note.status == "remote" then
     table.insert(meta, note.resolved and "resolved" or "open")
   end
+  if note.gitbutler and (note.gitbutler.unpublished == true or note.gitbutler.kind == "unassigned") then
+    table.insert(meta, "unpublished")
+  end
   if note.author then
     table.insert(meta, "by @" .. note.author)
   end
@@ -462,7 +567,7 @@ end
 ---@return string
 local function build_export_content(session, notes)
   local git = require("review.git")
-  local branch = git.current_branch() or "HEAD"
+  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
   local title = session.forge_info
       and string.format("# Review Notes for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
     or "# Review Notes"
@@ -593,7 +698,7 @@ end
 ---@return string
 local function build_clipboard_content(session, notes)
   local git = require("review.git")
-  local branch = git.current_branch() or "HEAD"
+  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
   local local_notes, open_threads, discussion_notes = clipboard_note_sections(notes)
   local total = #local_notes + #open_threads + #discussion_notes
   local title = session.forge_info
@@ -621,7 +726,7 @@ end
 ---@return string
 local function build_local_notes_clipboard_content(session, notes)
   local git = require("review.git")
-  local branch = git.current_branch() or "HEAD"
+  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
   local local_notes = {}
   for _, note in ipairs(notes) do
     if note.status == "draft" or note.status == "staged" then

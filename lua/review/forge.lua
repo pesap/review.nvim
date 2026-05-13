@@ -126,6 +126,7 @@ function M.invalidate_cache()
   cached_detect_root = nil
   cached_user = nil
   git.invalidate_cache()
+  require("review.gitbutler").invalidate_cache()
 end
 
 --- Post a single note as a line comment on a GitHub PR.
@@ -227,15 +228,18 @@ end
 ---@return table|nil ctx, string|nil err
 function M.resolve_context(info)
   if info.forge == "github" then
-    local out = vim.fn.systemlist({ "gh", "pr", "view", "--json", "headRefOid", "-q", ".headRefOid" })
+    local out =
+      vim.fn.systemlist({ "gh", "pr", "view", tostring(info.pr_number), "--json", "headRefOid", "-q", ".headRefOid" })
     if vim.v.shell_error ~= 0 or not out[1] then
       return nil, "Failed to resolve PR head commit"
     end
     local remote_head = out[1]
     -- Check if the local HEAD matches the remote PR head
-    local local_head = vim.fn.systemlist({ "git", "rev-parse", "HEAD" })
-    if vim.v.shell_error == 0 and local_head[1] and local_head[1] ~= remote_head then
-      return nil, "Local HEAD differs from remote PR head. Push your commits before publishing."
+    if not require("review.state").is_gitbutler() then
+      local local_head = vim.fn.systemlist({ "git", "rev-parse", "HEAD" })
+      if vim.v.shell_error == 0 and local_head[1] and local_head[1] ~= remote_head then
+        return nil, "Local HEAD differs from remote PR head. Push your commits before publishing."
+      end
     end
     return { commit_id = remote_head }, nil
   elseif info.forge == "gitlab" then

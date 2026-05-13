@@ -216,6 +216,54 @@ describe("review.ui explorer rail", function()
     assert.is_true(diff_pos[2] > git_pos[2])
   end)
 
+  it("replaces fugitive with a read-only GitButler pane for GitButler sessions", function()
+    local fugitive_called = false
+    git.open_fugitive_status = function()
+      fugitive_called = true
+      return nil, "should not be called"
+    end
+
+    state.create("local", "gitbutler/workspace", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      vcs = "gitbutler",
+      repo_root = "/tmp/review-nvim",
+      branch = "gitbutler/workspace",
+      gitbutler = {
+        unassignedChanges = {
+          { cliId = "aa", changeType = "added", filePath = "scratch.lua" },
+        },
+        stacks = {
+          {
+            cliId = "s1",
+            branches = {
+              {
+                cliId = "br",
+                name = "feature/gb",
+                branchStatus = "completelyUnpushed",
+                commits = {
+                  { commitId = "123456789", message = "feat: gb" },
+                },
+              },
+            },
+          },
+        },
+        mergeBase = { commitId = "abcdef1234567890" },
+        upstreamState = { behind = 2 },
+      },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local lines = vim.api.nvim_buf_get_lines(ui_state.git_buf, 0, -1, false)
+    assert.is_false(fugitive_called)
+    assert.are.equal("review-gitbutler", vim.bo[ui_state.git_buf].filetype)
+    assert.are.equal(" GitButler workspace", lines[1])
+    assert.is_true(vim.tbl_contains(lines, " unassigned"))
+    assert.is_true(vim.tbl_contains(lines, " stack s1"))
+  end)
+
   it("focuses the fugitive pane from explorer and diff", function()
     review.setup({
       keymaps = {
@@ -912,7 +960,7 @@ describe("review.ui help", function()
     assert.is_true(joined:match("Explorer") ~= nil)
     assert.is_true(joined:match("Diff") ~= nil)
     assert.is_true(joined:match("Open file or thread") ~= nil)
-    assert.is_true(joined:match("Focus git status pane") ~= nil)
+    assert.is_true(joined:match("Focus Git/Fugitive/GitButler pane") ~= nil)
     assert.is_true(joined:match("Toggle unified/split view") ~= nil)
     assert.is_nil(joined:match("AI Review Focus"))
     assert.is_nil(joined:match("review.nvim"))

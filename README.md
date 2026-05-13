@@ -7,7 +7,8 @@ Minimal code review plugin for Neovim.
 ## What it does
 
 - Dual-panel layout (file explorer + diff viewer) in its own tab
-- Embedded Git status pane for worktree reviews
+- Embedded Fugitive status pane for worktree reviews
+- GitButler workspace detection with a read-only stack pane
 - Unified and side-by-side split views
 - Word-level diff highlighting
 - Explicit review scope modes: `All`, `Current Commit`, and `Select Commit`
@@ -30,6 +31,7 @@ Minimal code review plugin for Neovim.
 - Neovim >= 0.9.0
 - `git`
 - `vim-fugitive` (https://github.com/tpope/vim-fugitive) for the embedded git status pane
+- `but` CLI (https://docs.gitbutler.com/cli-overview) for GitButler workspace support
 - `gh` CLI (https://cli.github.com) for GitHub PR features
 - `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
 - `plenary.nvim` for tests
@@ -54,7 +56,7 @@ lazy.nvim:
 ## Usage
 
 ```vim
-:Review              " local review (default branch when available, otherwise HEAD/worktree)
+:Review              " local review (GitButler workspace when detected, otherwise default branch/HEAD)
 :Review HEAD~3       " diff against a ref (shows commits)
 :Review main         " diff against main
 :ReviewToggle        " open/close
@@ -137,13 +139,15 @@ The left rail shows the active `Scope` explicitly:
 - `select · <sha>` while browsing commits directly from the rail
 
 In local worktree reviews opened without an explicit ref, review.nvim embeds a
-Git status pane below the explorer in the left rail. Press `g` to jump to it.
-Standard Git repos use Fugitive there, with review.nvim's window theme applied
-so it feels like part of the same layout.
+Fugitive status pane below the explorer in the left rail. Press `g` to jump to
+it. That pane uses your normal Fugitive keymaps and actions, but inherits
+review.nvim's window theme so it feels like part of the same layout.
 
-If the repository is set up with GitButler, review.nvim shows a read-only
-GitButler status pane there instead of embedding Fugitive write actions inside
-that workspace.
+When the current branch is `gitbutler/workspace` and `but -j status` works,
+`:Review` switches to GitButler mode. The file list is built from GitButler
+stack branches plus unassigned changes, `T` cycles through branch/unassigned
+scopes, and the lower-left pane becomes a read-only GitButler workspace summary
+instead of Fugitive. Stack mutations still belong in GitButler or the `but` CLI.
 
 If Fugitive is not installed, review.nvim shows a small themed placeholder pane
 instead of failing the whole review UI.
@@ -174,6 +178,12 @@ Git status pane:
 
 - In standard Git repos: `-` stages or unstages the entry under the cursor, `cc` creates a commit, and `A` stages all changes
 - In GitButler repos: review.nvim shows the current GitButler status output in a read-only pane
+- `q` closes the full review layout through review.nvim
+
+GitButler pane:
+
+- read-only summary of unassigned changes, applied stacks, branch status, review IDs, and upstream state
+- `g` focuses the pane
 - `q` closes the full review layout through review.nvim
 
 Commands:
@@ -223,6 +233,11 @@ Use `:ReviewClipboardLocal` or `Y` if you only want your own local draft/staged 
 Remote review threads are shown separately from the file list in the sidebar, grouped by source such as `github/`, `gitlab/`, or `local/`.
 
 When you create a local note while scoped to a commit, the note is stamped with that commit SHA. In `all` scope those commit-bound notes can still be surfaced, but in commit scope only matching local notes are shown. Remote GitHub/GitLab threads stay conservative: they are filtered by active file membership rather than guessed commit attribution.
+
+In GitButler mode, notes created on unassigned changes or unpublished branches
+are marked `unpublished`. They are included in local/export/clipboard workflows,
+but publishing to GitHub/GitLab is blocked until the change is committed and
+pushed into a PR/MR-compatible branch context.
 
 If you switch branches or the remote review context becomes outdated, `:ReviewRefresh`/UI refresh will reopen the session against the current branch and move no-longer-valid notes/threads into `Stale`.
 
