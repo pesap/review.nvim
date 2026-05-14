@@ -200,7 +200,9 @@ function M.diff_files(target, opts)
 end
 
 local function change_key(file)
-  return (file.path or "") .. "::" .. (file.status or "")
+  local gb = file.gitbutler or {}
+  local branch_key = gb.kind == "branch" and (gb.branch_cli_id or gb.branch_name or "branch") or (gb.kind or "")
+  return table.concat({ file.path or "", file.status or "", branch_key }, "::")
 end
 
 local function merge_files(target, files)
@@ -223,6 +225,7 @@ end
 local function branch_scope(branch)
   local files, err = M.diff_files(branch.cliId or branch.name, {
     gitbutler = {
+      kind = "branch",
       branch_name = branch.name,
       branch_cli_id = branch.cliId,
       branch_status = branch.branchStatus,

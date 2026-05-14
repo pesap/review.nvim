@@ -297,17 +297,21 @@ describe("review.ui explorer rail", function()
       repo_root = "/tmp/review-nvim",
       branch = "gitbutler/workspace",
       gitbutler = {},
+      untracked_files = {
+        { path = "scratch.tmp", status = "?", untracked = true, hunks = {} },
+      },
     })
 
     ui.open()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().files_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
+    assert.is_true(joined:find("Branch feature/gb", 1, true) ~= nil)
     assert.is_true(joined:match("  M lua/.*%.lua") ~= nil)
     assert.is_true(joined:find("Unassigned", 1, true) ~= nil)
     assert.is_true(joined:find("  A .nvimlog", 1, true) ~= nil)
-    assert.is_true(joined:find("Untracked", 1, true) ~= nil)
     assert.is_true(joined:match("  %? myst.*%.lua") ~= nil)
+    assert.is_true(joined:find("Untracked", 1, true) ~= nil)
   end)
 
   it("focuses the fugitive pane from explorer and diff", function()
