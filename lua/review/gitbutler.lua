@@ -50,6 +50,21 @@ local function denull(value)
   return value
 end
 
+local function parse_review_id(value)
+  value = denull(value)
+  if value == nil then
+    return nil
+  end
+  if type(value) == "number" then
+    return value
+  end
+  return tonumber(tostring(value):match("#?(%d+)"))
+end
+
+function M._parse_review_id(value)
+  return parse_review_id(value)
+end
+
 ---@return boolean
 function M.available()
   return vim.fn.executable("but") == 1
@@ -164,7 +179,7 @@ local function change_to_file(change, opts)
     path = path,
     status = status_code(change_type or change.status or change.changeType),
     hunks = {},
-    gitbutler = opts.gitbutler,
+    gitbutler = vim.deepcopy(opts.gitbutler),
   }
   if opts.unassigned then
     file.gitbutler_unassigned = true
@@ -194,7 +209,10 @@ function M.diff_files(target, opts)
   end
   local files = {}
   for _, change in ipairs(data.changes) do
-    table.insert(files, change_to_file(change, opts))
+    local path = change.path or change.filePath or ""
+    if not opts.paths_by_path or opts.paths_by_path[path] then
+      table.insert(files, change_to_file(change, opts))
+    end
   end
   return files, nil
 end
@@ -208,21 +226,27 @@ end
 local function merge_files(target, files)
   local seen = {}
   for _, existing in ipairs(target) do
-    seen[change_key(existing)] = true
+    seen[change_key(existing)] = existing
   end
   for _, file in ipairs(files) do
     local key = change_key(file)
-    if not seen[key] then
+    local existing = seen[key]
+    if existing then
+      for _, hunk in ipairs(file.hunks or {}) do
+        table.insert(existing.hunks, hunk)
+      end
+    else
       table.insert(target, file)
-      seen[key] = true
+      seen[key] = file
     end
   end
 end
 
 ---@param branch table
+---@param extra_files ReviewFile[]|nil
 ---@return table|nil scope
 ---@return string|nil err
-local function branch_scope(branch)
+local function branch_scope(branch, extra_files)
   local files, err = M.diff_files(branch.cliId or branch.name, {
     gitbutler = {
       kind = "branch",
@@ -234,6 +258,9 @@ local function branch_scope(branch)
   })
   if not files then
     return nil, err
+  end
+  if extra_files and #extra_files > 0 then
+    merge_files(files, extra_files)
   end
   if #files == 0 then
     return nil, nil
@@ -268,8 +295,34 @@ function M.workspace_review()
   local files = {}
   local commits = {}
   for _, stack in ipairs(status.stacks or {}) do
-    for _, branch in ipairs(stack.branches or {}) do
-      local scope, scope_err = branch_scope(branch)
+    local assigned_change_types = {}
+    for _, change in ipairs(stack.assignedChanges or {}) do
+      local path = change.filePath or change.path
+      if path then
+        assigned_change_types[path] = change.changeType or change.status
+      end
+    end
+
+    for branch_idx, branch in ipairs(stack.branches or {}) do
+      local assigned_files = nil
+      if branch_idx == #(stack.branches or {}) and next(assigned_change_types) ~= nil then
+        assigned_files, err = M.diff_files(stack.cliId, {
+          paths_by_path = assigned_change_types,
+          change_types_by_path = assigned_change_types,
+          gitbutler = {
+            kind = "branch",
+            branch_name = branch.name,
+            branch_cli_id = branch.cliId,
+            branch_status = branch.branchStatus,
+            review_id = denull(branch.reviewId),
+            assigned = true,
+          },
+        })
+        if not assigned_files then
+          return nil, err
+        end
+      end
+      local scope, scope_err = branch_scope(branch, assigned_files)
       if scope_err then
         return nil, scope_err
       end
@@ -291,6 +344,7 @@ function M.workspace_review()
   local unassigned, unassigned_err = M.diff_files(nil, {
     unassigned = true,
     gitbutler = { kind = "unassigned" },
+    paths_by_path = unassigned_change_types,
     change_types_by_path = unassigned_change_types,
   })
   if not unassigned then
@@ -323,6 +377,92 @@ end
 ---@return boolean
 function M.scope_is_unpublished(commit)
   return commit and commit.gitbutler and commit.gitbutler.unpublished == true or false
+end
+
+---@param scope table|nil
+---@return table|nil info, string|nil err
+function M.resolve_review_target(scope)
+  if not scope or scope.kind == "unassigned" then
+    return nil, "unassigned GitButler changes do not have a remote review target"
+  end
+  if scope.kind ~= "branch" then
+    return nil, "GitButler note is not attached to a branch"
+  end
+
+  local remote = require("review.git").parse_remote()
+  if not remote then
+    return nil, "could not detect GitHub/GitLab remote"
+  end
+
+  local review_id = parse_review_id(scope.review_id)
+  if review_id then
+    return {
+      forge = remote.forge,
+      owner = remote.owner,
+      repo = remote.repo,
+      pr_number = review_id,
+      branch_name = scope.branch_name,
+    }, nil
+  end
+
+  local branch_name = scope.branch_name
+  if not branch_name or branch_name == "" then
+    return nil, "GitButler branch has no branch name"
+  end
+
+  local query
+  if remote.forge == "github" then
+    query = {
+      "gh",
+      "pr",
+      "list",
+      "--state",
+      "open",
+      "--head",
+      branch_name,
+      "--json",
+      "number,headRefName,baseRefName",
+    }
+  elseif remote.forge == "gitlab" then
+    query = {
+      "glab",
+      "mr",
+      "list",
+      "--state",
+      "opened",
+      "--source-branch",
+      branch_name,
+      "--output",
+      "json",
+    }
+  else
+    return nil, "unsupported forge: " .. tostring(remote.forge)
+  end
+
+  local reviews, err = run_json(query)
+  if not reviews then
+    return nil, err or "failed to query open reviews for " .. branch_name
+  end
+  if #reviews == 0 then
+    return nil, "branch " .. branch_name .. " has no open PR/MR"
+  end
+  if #reviews > 1 then
+    return nil, "branch " .. branch_name .. " has multiple open PR/MR matches"
+  end
+
+  local review = reviews[1]
+  local number = tonumber(review.number or review.iid or review.id)
+  if not number then
+    return nil, "open review for " .. branch_name .. " has no numeric ID"
+  end
+
+  return {
+    forge = remote.forge,
+    owner = remote.owner,
+    repo = remote.repo,
+    pr_number = number,
+    branch_name = branch_name,
+  }, nil
 end
 
 function M.invalidate_cache()

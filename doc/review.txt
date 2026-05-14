@@ -143,7 +143,8 @@ Explorer panel:~
                 jump to the related diff location. Scope rows select
                 `all` or a specific commit.
     ?           Open review help.
-    T           Cycle between `All`, `Current Commit`, and `Select Commit`.
+    T           Cycle scopes. In GitButler, cycle each branch/unassigned scope.
+    R           Refresh review data from the current repo/workspace.
     f           Focus the Files section.
     g           Focus the git status pane.
     t           Focus the Threads section.
@@ -165,7 +166,8 @@ Diff viewer:~
     n / ]n      Jump to the next note (across files).
     [n          Jump to the previous note (across files).
     s           Toggle between unified and side-by-side split view.
-    T           Cycle between `All`, `Current Commit`, and `Select Commit`.
+    T           Cycle scopes. In GitButler, cycle each branch/unassigned scope.
+    R           Refresh review data from the current repo/workspace.
     f           Focus the Files section in the explorer.
     g           Focus the git status pane.
     t           Focus the Threads section in the explorer.
@@ -190,6 +192,8 @@ Notes list (N):~
     dd          Delete the note.
     s           Toggle the note between draft and staged.
     P           Publish all staged notes.
+                In GitButler workspaces, publishes each note to its virtual
+                branch PR/MR; unassigned/no-PR notes stay local/staged.
     y           Copy local notes, open threads, and discussion.
     Y           Copy only local draft/staged notes.
     C           Clear all local notes after confirmation.
@@ -215,6 +219,11 @@ Notes go through three stages:
 
 Notes are persisted automatically across sessions. They are stored as JSON
 in `vim.fn.stdpath("data")/review/`.
+
+In GitButler workspaces, remote publishing is branch-scoped. review.nvim uses
+GitButler `reviewId` metadata first, then falls back to looking up one open
+PR/MR by branch name. Notes on unassigned changes, branches without an open
+PR/MR, or ambiguous branch matches remain staged and local.
 
                                                         *review-notes-refs*
 Note references~
@@ -285,6 +294,7 @@ Default configuration: >lua
         prev_note = "[n",
         toggle_split = "s",
         toggle_stack = "T",
+        refresh = "R",
         focus_files = "f",
         focus_git = "g",
         focus_threads = "t",
