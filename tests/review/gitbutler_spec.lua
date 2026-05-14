@@ -27,6 +27,19 @@ describe("gitbutler adapter", function()
               },
             },
           },
+          {
+            cliId = "br2",
+            name = "feature/other",
+            branchStatus = "completelyUnpushed",
+            reviewId = vim.NIL,
+            commits = {
+              {
+                commitId = "abcdef1234567890",
+                message = "feat: other",
+                authorName = "pesap",
+              },
+            },
+          },
         },
       },
     },
@@ -99,6 +112,9 @@ describe("gitbutler adapter", function()
       if joined == "but -j diff br" then
         return branch_diff_json, 0
       end
+      if joined == "but -j diff br2" then
+        return branch_diff_json, 0
+      end
       if joined == "but -j diff" then
         return unassigned_diff_json, 0
       end
@@ -120,8 +136,8 @@ describe("gitbutler adapter", function()
 
   it("builds review files and branch/unassigned scopes", function()
     local review_data = assert(gitbutler.workspace_review())
-    assert.are.equal(2, #review_data.files)
-    assert.are.equal(2, #review_data.commits)
+    assert.are.equal(3, #review_data.files)
+    assert.are.equal(3, #review_data.commits)
 
     local branch_scope = review_data.commits[1]
     assert.are.equal("feature/gb", branch_scope.gitbutler.branch_name)
@@ -130,7 +146,11 @@ describe("gitbutler adapter", function()
     assert.are.equal("del", branch_scope.files[1].hunks[1].lines[1].type)
     assert.are.equal("add", branch_scope.files[1].hunks[1].lines[2].type)
 
-    local unassigned = review_data.commits[2]
+    local duplicate_branch_scope = review_data.commits[2]
+    assert.are.equal("feature/other", duplicate_branch_scope.gitbutler.branch_name)
+    assert.are.equal("lua/review.lua", duplicate_branch_scope.files[1].path)
+
+    local unassigned = review_data.commits[3]
     assert.are.equal("unassigned", unassigned.gitbutler.kind)
     assert.is_true(unassigned.gitbutler.unpublished)
     assert.are.equal("scratch.lua", unassigned.files[1].path)

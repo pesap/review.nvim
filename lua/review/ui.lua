@@ -1769,7 +1769,7 @@ local function render_files_pane(buf)
   local tracked_files = {}
   local untracked_files = {}
   for _, entry in ipairs(sorted_file_entries(active_files)) do
-    if entry.file.untracked or entry.file.status == "?" then
+    if entry.file.untracked or (entry.file.status == "?" and not entry.file.gitbutler) then
       table.insert(untracked_files, entry)
     else
       table.insert(tracked_files, entry)
@@ -1916,16 +1916,26 @@ local function render_files_pane(buf)
   end
 
   if state.is_gitbutler() and state.scope_mode() == "all" then
-    local branch_entries = {}
+    local branch_groups = {}
+    local branch_order = {}
     local unassigned_entries = {}
     for _, entry in ipairs(tracked_files) do
       if entry.file.gitbutler and entry.file.gitbutler.kind == "unassigned" then
         table.insert(unassigned_entries, entry)
       else
-        table.insert(branch_entries, entry)
+        local gb = entry.file.gitbutler or {}
+        local label = gb.branch_name or gb.branch_cli_id or "assigned"
+        if not branch_groups[label] then
+          branch_groups[label] = {}
+          table.insert(branch_order, label)
+        end
+        table.insert(branch_groups[label], entry)
       end
     end
-    add_file_rows("files", branch_entries)
+    for _, label in ipairs(branch_order) do
+      add_section_header("files", "Branch " .. label, HL.panel_meta)
+      add_file_rows("files", branch_groups[label])
+    end
     if #unassigned_entries > 0 then
       add_section_header("files", "Unassigned", HL.panel_meta)
       add_file_rows("files", unassigned_entries)
