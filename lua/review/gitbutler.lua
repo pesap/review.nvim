@@ -402,7 +402,8 @@ function M.resolve_review_target(scope)
       repo = remote.repo,
       pr_number = review_id,
       branch_name = scope.branch_name,
-    }, nil
+    },
+      nil
   end
 
   local branch_name = scope.branch_name
@@ -462,7 +463,8 @@ function M.resolve_review_target(scope)
     repo = remote.repo,
     pr_number = number,
     branch_name = branch_name,
-  }, nil
+  },
+    nil
 end
 
 function M.invalidate_cache()

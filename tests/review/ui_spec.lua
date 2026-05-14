@@ -1377,6 +1377,7 @@ describe("review.ui notes list", function()
     local original_resolve_target = gitbutler.resolve_review_target
     local original_resolve_context = forge.resolve_context
     local original_post_comment = forge.post_comment
+    local original_refresh = ui.refresh
 
     state.create("local", "gitbutler/workspace", {
       { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
@@ -1443,6 +1444,7 @@ describe("review.ui notes list", function()
       table.insert(posted, { pr = info.pr_number, note = note.body, commit = ctx.commit_id })
       return "https://example.test/" .. tostring(info.pr_number) .. "/" .. tostring(note.id), nil
     end
+    ui.refresh = function() end
 
     ui.open_notes_list()
     send_keys("P")
@@ -1458,6 +1460,7 @@ describe("review.ui notes list", function()
     gitbutler.resolve_review_target = original_resolve_target
     forge.resolve_context = original_resolve_context
     forge.post_comment = original_post_comment
+    ui.refresh = original_refresh
   end)
 
   it("keeps the notes list open while refreshing remote comments", function()
