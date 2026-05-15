@@ -5,6 +5,7 @@ describe("gitbutler adapter", function()
   local original_executable
   local original_branch
   local original_root
+  local original_parse_remote
 
   local status_json = vim.fn.json_encode({
     unassignedChanges = {
@@ -13,6 +14,9 @@ describe("gitbutler adapter", function()
     stacks = {
       {
         cliId = "s1",
+        assignedChanges = {
+          { cliId = "st", filePath = "lua/staged.lua", changeType = "modified" },
+        },
         branches = {
           {
             cliId = "br",
@@ -68,6 +72,27 @@ describe("gitbutler adapter", function()
     },
   })
 
+  local stack_diff_json = vim.fn.json_encode({
+    changes = {
+      {
+        path = "lua/staged.lua",
+        status = "modified",
+        diff = {
+          type = "patch",
+          hunks = {
+            {
+              oldStart = 2,
+              oldLines = 1,
+              newStart = 2,
+              newLines = 1,
+              diff = "@@ -2,1 +2,1 @@\n-before\n+staged\n",
+            },
+          },
+        },
+      },
+    },
+  })
+
   local unassigned_diff_json = vim.fn.json_encode({
     changes = {
       {
@@ -94,6 +119,7 @@ describe("gitbutler adapter", function()
     original_executable = vim.fn.executable
     original_branch = git.current_branch
     original_root = git.root
+    original_parse_remote = git.parse_remote
 
     vim.fn.executable = function(name)
       return name == "but" and 1 or original_executable(name)
@@ -103,6 +129,9 @@ describe("gitbutler adapter", function()
     end
     git.root = function()
       return "/repo"
+    end
+    git.parse_remote = function()
+      return { forge = "github", owner = "pesap", repo = "review.nvim" }
     end
     gitbutler._set_runner(function(cmd)
       local joined = table.concat(cmd, " ")
@@ -114,6 +143,9 @@ describe("gitbutler adapter", function()
       end
       if joined == "but -j diff br2" then
         return branch_diff_json, 0
+      end
+      if joined == "but -j diff s1" then
+        return stack_diff_json, 0
       end
       if joined == "but -j diff" then
         return unassigned_diff_json, 0
@@ -127,6 +159,7 @@ describe("gitbutler adapter", function()
     vim.fn.executable = original_executable
     git.current_branch = original_branch
     git.root = original_root
+    git.parse_remote = original_parse_remote
     gitbutler.invalidate_cache()
   end)
 
@@ -136,7 +169,7 @@ describe("gitbutler adapter", function()
 
   it("builds review files and branch/unassigned scopes", function()
     local review_data = assert(gitbutler.workspace_review())
-    assert.are.equal(3, #review_data.files)
+    assert.are.equal(4, #review_data.files)
     assert.are.equal(3, #review_data.commits)
 
     local branch_scope = review_data.commits[1]
@@ -149,12 +182,58 @@ describe("gitbutler adapter", function()
     local duplicate_branch_scope = review_data.commits[2]
     assert.are.equal("feature/other", duplicate_branch_scope.gitbutler.branch_name)
     assert.are.equal("lua/review.lua", duplicate_branch_scope.files[1].path)
+    assert.are.equal("lua/staged.lua", duplicate_branch_scope.files[2].path)
+    assert.is_true(duplicate_branch_scope.files[2].gitbutler.assigned)
 
     local unassigned = review_data.commits[3]
     assert.are.equal("unassigned", unassigned.gitbutler.kind)
     assert.is_true(unassigned.gitbutler.unpublished)
     assert.are.equal("scratch.lua", unassigned.files[1].path)
     assert.are.equal("A", unassigned.files[1].status)
+  end)
+
+  it("resolves GitButler review targets from review IDs and branch PR lookup", function()
+    assert.are.equal(17, gitbutler._parse_review_id("(#17)"))
+
+    local info = assert(gitbutler.resolve_review_target({
+      kind = "branch",
+      branch_name = "feature/gb",
+      review_id = "(#17)",
+    }))
+    assert.are.equal(17, info.pr_number)
+    assert.are.equal("feature/gb", info.branch_name)
+
+    gitbutler._set_runner(function(cmd)
+      local joined = table.concat(cmd, " ")
+      if joined == "gh pr list --state open --head feature/lookup --json number,headRefName,baseRefName" then
+        return vim.fn.json_encode({ { number = 23, headRefName = "feature/lookup", baseRefName = "main" } }), 0
+      end
+      return "unexpected command: " .. joined, 1
+    end)
+
+    local looked_up = assert(gitbutler.resolve_review_target({
+      kind = "branch",
+      branch_name = "feature/lookup",
+    }))
+    assert.are.equal(23, looked_up.pr_number)
+  end)
+
+  it("blocks GitButler review target resolution without an open PR", function()
+    local info, err = gitbutler.resolve_review_target({ kind = "unassigned" })
+    assert.is_nil(info)
+    assert.is_true(err:find("unassigned", 1, true) ~= nil)
+
+    gitbutler._set_runner(function(cmd)
+      local joined = table.concat(cmd, " ")
+      if joined == "gh pr list --state open --head feature/no-pr --json number,headRefName,baseRefName" then
+        return vim.fn.json_encode({}), 0
+      end
+      return "unexpected command: " .. joined, 1
+    end)
+
+    info, err = gitbutler.resolve_review_target({ kind = "branch", branch_name = "feature/no-pr" })
+    assert.is_nil(info)
+    assert.is_true(err:find("no open PR/MR", 1, true) ~= nil)
   end)
 
   it("surfaces GitButler diff failures", function()

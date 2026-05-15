@@ -2670,7 +2670,9 @@ function M.select_commit(idx, opts)
     state.set_scope_mode("current_commit")
   end
 
-  M.refresh()
+  if state.get_ui() then
+    M.refresh()
+  end
 end
 
 --- Toggle between all, current-commit, and commit-picker scope modes.
@@ -2685,6 +2687,16 @@ function M.toggle_stack_view()
   end
 
   local mode = state.scope_mode()
+  if state.is_gitbutler() then
+    local next_idx = mode == "all" and 1 or ((s.current_commit_idx or 0) + 1)
+    if next_idx > #s.commits then
+      M.select_commit(nil)
+    else
+      M.select_commit(next_idx, { scope_mode = "current_commit" })
+    end
+    return
+  end
+
   if mode == "all" then
     M.select_commit(s.current_commit_idx or 1, { scope_mode = "current_commit" })
     return
@@ -2698,6 +2710,27 @@ function M.toggle_stack_view()
   end
 
   M.select_commit(nil)
+end
+
+function M.refresh_session()
+  local review = require("review")
+  local s = state.get()
+  if not s then
+    return
+  end
+  if s.mode == "local" then
+    if review.refresh_local_session() then
+      if state.get_forge_info() then
+        review.refresh_comments()
+      else
+        M.refresh()
+      end
+    else
+      vim.notify("Could not refresh local review", vim.log.levels.WARN)
+    end
+    return
+  end
+  review.refresh_comments()
 end
 
 --- Select a file in the explorer and render its diff.
@@ -2773,6 +2806,12 @@ local function setup_nav_keymaps(buf)
   vim.keymap.set("n", km.toggle_stack, function()
     M.toggle_stack_view()
   end, opts)
+
+  if km.refresh then
+    vim.keymap.set("n", km.refresh, function()
+      M.refresh_session()
+    end, opts)
+  end
 
   vim.keymap.set("n", km.focus_files, function()
     M.focus_section("files")
@@ -2942,6 +2981,12 @@ setup_diff_keymaps = function(buf)
   vim.keymap.set("n", km.toggle_stack, function()
     M.toggle_stack_view()
   end, opts)
+
+  if km.refresh then
+    vim.keymap.set("n", km.refresh, function()
+      M.refresh_session()
+    end, opts)
+  end
 
   vim.keymap.set("n", km.focus_files, function()
     M.focus_section("files")
@@ -3926,6 +3971,73 @@ local function reopen_notes_list(win, opts)
   M.open_notes_list(opts)
 end
 
+local function publish_gitbutler_notes(staged_notes, list_win)
+  local gitbutler = require("review.gitbutler")
+  local groups = {}
+  local order = {}
+  local blocked = {}
+
+  for _, note in ipairs(staged_notes) do
+    local info, err = gitbutler.resolve_review_target(note.gitbutler)
+    if info then
+      local key = string.format("%s:%s/%s#%s", info.forge, info.owner, info.repo, tostring(info.pr_number))
+      if not groups[key] then
+        groups[key] = { info = info, notes = {} }
+        table.insert(order, key)
+      end
+      table.insert(groups[key].notes, note)
+    else
+      table.insert(blocked, string.format("#%d: %s", note.id, err or "no remote review target"))
+    end
+  end
+
+  local url_map = {}
+  local errors = {}
+  for _, key in ipairs(order) do
+    local group = groups[key]
+    vim.notify(
+      string.format("Publishing %d note(s) to %s PR #%d...", #group.notes, group.info.forge, group.info.pr_number),
+      vim.log.levels.INFO
+    )
+    local ctx, ctx_err = forge.resolve_context(group.info)
+    if not ctx then
+      table.insert(errors, string.format("%s PR #%d: %s", group.info.forge, group.info.pr_number, ctx_err or "unknown"))
+    else
+      for _, note in ipairs(group.notes) do
+        local url, err = forge.post_comment(group.info, note, ctx)
+        if url then
+          url_map[note.id] = url
+        elseif err then
+          table.insert(errors, string.format("#%d: %s", note.id, err))
+        end
+      end
+    end
+  end
+
+  local count = state.publish_staged(url_map)
+  local messages = {}
+  if count > 0 then
+    table.insert(messages, count .. " note(s) published")
+  end
+  for _, msg in ipairs(blocked) do
+    table.insert(messages, msg)
+  end
+  for _, msg in ipairs(errors) do
+    table.insert(messages, msg)
+  end
+
+  if #messages == 0 then
+    vim.notify("No GitButler notes were published", vim.log.levels.INFO)
+  elseif #blocked > 0 or #errors > 0 then
+    vim.notify(table.concat(messages, "\n"), vim.log.levels.WARN)
+  else
+    vim.notify(table.concat(messages, "\n"), vim.log.levels.INFO)
+  end
+
+  reopen_notes_list(list_win)
+  M.refresh()
+end
+
 --- Open a floating window listing all notes across all files.
 --- Pressing <CR> on a note jumps to that file and line.
 ---@param opts table|nil
@@ -4303,6 +4415,11 @@ function M.open_notes_list(opts)
       return
     end
 
+    if state.is_gitbutler() then
+      publish_gitbutler_notes(staged_notes, list_win)
+      return
+    end
+
     local info = state.get_forge_info()
 
     if not info then
@@ -4316,26 +4433,6 @@ function M.open_notes_list(opts)
       reopen_notes_list(list_win)
       M.refresh()
       return
-    end
-
-    local publishable_notes = {}
-    local blocked = {}
-    for _, note in ipairs(staged_notes) do
-      if note_is_gitbutler_unpublished(note) then
-        table.insert(blocked, note)
-      else
-        table.insert(publishable_notes, note)
-      end
-    end
-    if #blocked > 0 then
-      vim.notify(
-        "This note is on an unpublished GitButler change. Commit and push the branch before publishing.",
-        vim.log.levels.WARN
-      )
-      if #publishable_notes == 0 then
-        return
-      end
-      staged_notes = publishable_notes
     end
 
     vim.notify(
@@ -4626,6 +4723,9 @@ function M.open_help()
   end
 
   local function add_item(lhs, rhs)
+    if not lhs then
+      return
+    end
     local base = "  " .. lhs
     local target_col = 24
     local gap = math.max(2, target_col - vim.fn.strdisplaywidth(base))
@@ -4657,7 +4757,7 @@ function M.open_help()
   add_item(":ReviewClipboard", "Copy local notes, open threads, and discussion")
   add_item(":ReviewClipboardLocal", "Copy only local notes to the clipboard")
   add_item(":ReviewClearLocal", "Clear all local notes after confirmation")
-  add_item(":ReviewRefresh", "Refresh remote PR/MR comments")
+  add_item(":ReviewRefresh", "Refresh review data")
   add_item(":ReviewComment", "Add a note")
   add_item(":ReviewSuggestion", "Add a suggestion")
   add_item(":ReviewExport [path]", "Export notes to markdown")
@@ -4670,6 +4770,7 @@ function M.open_help()
   add_item(km.focus_git, "Focus Git/Fugitive/GitButler pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
+  add_item(km.refresh, "Refresh review data")
   add_item("<CR>", "Open file or thread")
 
   add_section("Diff")
@@ -4691,6 +4792,7 @@ function M.open_help()
   add_item(km.focus_git, "Focus Git/Fugitive/GitButler pane")
   add_item(km.focus_threads, "Focus Threads section")
   add_item(km.toggle_stack, "Cycle stack/commit scope")
+  add_item(km.refresh, "Refresh review data")
   add_item(km.notes_list, "Open notes list")
   add_item(km.close, "Close the full review layout")
   add_item(km.help, "Open this help")

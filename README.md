@@ -109,6 +109,7 @@ require("review").setup({
     prev_note = "[n",
     toggle_split = "s",
     toggle_stack = "T",
+    refresh = "R",
     focus_files = "f",
     focus_git = "g",
     focus_threads = "t",
@@ -145,9 +146,11 @@ review.nvim's window theme so it feels like part of the same layout.
 
 When the current branch is `gitbutler/workspace` and `but -j status` works,
 `:Review` switches to GitButler mode. The file list is built from GitButler
-stack branches plus unassigned changes, `T` cycles through branch/unassigned
-scopes, and the lower-left pane becomes a read-only GitButler workspace summary
-instead of Fugitive. Stack mutations still belong in GitButler or the `but` CLI.
+stack branches plus staged and unassigned changes, `T` cycles through each
+GitButler branch/unassigned scope, and `R` refreshes from the latest `but`
+workspace state. The lower-left pane becomes a read-only GitButler workspace
+summary instead of Fugitive. Stack mutations still belong in GitButler or the
+`but` CLI.
 
 If Fugitive is not installed, review.nvim shows a small themed placeholder pane
 instead of failing the whole review UI.
@@ -168,7 +171,8 @@ Diff viewer:
 | `]f` / `[f` | next/prev file                     |
 | `n`, `]n` / `[n` | next/prev note                 |
 | `s`         | toggle split                       |
-| `T`         | cycle `All` -> `Current Commit` -> `Select Commit` |
+| `T`         | cycle scopes (GitButler: each branch/unassigned scope) |
+| `R`         | refresh review data                |
 | `f`         | focus the Files section            |
 | `g`         | focus the git status pane          |
 | `t`         | focus the Threads section          |
@@ -193,7 +197,7 @@ Commands:
 | `:ReviewNotes` | open the notes list |
 | `:ReviewComment` | add a note at the cursor/selection or an explicit target |
 | `:ReviewSuggestion` | add a suggestion at the cursor/selection or an explicit target |
-| `:ReviewRefresh` | re-fetch PR/MR comments |
+| `:ReviewRefresh` | refresh review data |
 | `:ReviewClipboard` | copy local notes, open threads, and discussion items to the clipboard |
 | `:ReviewClipboardLocal` | copy only local draft/staged notes to the clipboard |
 | `:ReviewClearLocal` | clear all local notes after confirmation |
@@ -223,6 +227,12 @@ Notes go through three stages:
 1. **Draft** (`-`) — newly created notes start here
 2. **Staged** (`+`) — press `s` to mark a note as ready to publish
 3. **Published** (`*`) — press `P` to publish all staged notes
+
+In GitButler workspaces, staged notes publish to the PR/MR for their virtual
+branch. review.nvim uses GitButler `reviewId` metadata first, then falls back to
+looking up one open PR/MR by branch name. Notes on unassigned changes, branches
+without an open PR/MR, or ambiguous branch matches stay local/staged and are not
+published.
 
 Notes persist across sessions automatically. Reference other notes by typing `#<id>` in the note body (e.g., `see #1 for context`). Referenced notes are highlighted and navigable with `gd`.
 

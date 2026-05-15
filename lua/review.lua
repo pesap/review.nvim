@@ -33,6 +33,7 @@ local defaults = {
     prev_note = "[n",
     toggle_split = "s",
     toggle_stack = "T",
+    refresh = "R",
     focus_files = "f",
     focus_git = "g",
     focus_threads = "t",
@@ -231,10 +232,16 @@ function M.open(args)
     return
   end
 
+  local gitbutler = require("review.gitbutler")
   local forge = require("review.forge")
 
   if #args > 0 then
     M._open_with_ref(args[1], { requested_ref = args[1] })
+    return
+  end
+
+  if gitbutler.is_workspace() then
+    M._open_with_ref(nil, { requested_ref = nil })
     return
   end
 

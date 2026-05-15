@@ -193,6 +193,17 @@ describe("review.ui explorer rail", function()
     assert.is_true(vim.tbl_contains(thread_lines, "     revi…lua [1]"))
   end)
 
+  it("opens without a configured refresh keymap", function()
+    review.config.keymaps.refresh = nil
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    assert.has_no.errors(function()
+      ui.open()
+    end)
+  end)
+
   it("opens an embedded fugitive pane for worktree reviews", function()
     state.create("local", "HEAD", {
       { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
@@ -273,6 +284,13 @@ describe("review.ui explorer rail", function()
   end)
 
   it("separates unassigned GitButler changes from branch files", function()
+    git.current_branch = function()
+      return "gitbutler/workspace"
+    end
+    git.is_gitbutler_workspace = function()
+      return true
+    end
+
     state.create("local", "gitbutler/workspace", {
       {
         path = "lua/review.lua",
@@ -301,6 +319,49 @@ describe("review.ui explorer rail", function()
         { path = "scratch.tmp", status = "?", untracked = true, hunks = {} },
       },
     })
+
+    state.set_commits({
+      {
+        sha = "branch-scope",
+        short_sha = "branch",
+        message = "feature/gb",
+        files = {
+          {
+            path = "lua/review.lua",
+            status = "M",
+            hunks = { sample_hunk(2, 2) },
+            gitbutler = { kind = "branch", branch_name = "feature/gb" },
+          },
+        },
+        gitbutler = { kind = "branch", branch_name = "feature/gb" },
+      },
+      {
+        sha = "gitbutler-unassigned",
+        short_sha = "unassgn",
+        message = "unassigned changes",
+        files = {
+          {
+            path = ".nvimlog",
+            status = "A",
+            hunks = { sample_hunk(1, 1) },
+            gitbutler = { kind = "unassigned" },
+          },
+        },
+        gitbutler = { kind = "unassigned" },
+      },
+    })
+
+    ui.toggle_stack_view()
+    assert.are.equal(1, state.get().current_commit_idx)
+    assert.are.equal("current_commit", state.scope_mode())
+
+    ui.toggle_stack_view()
+    assert.are.equal(2, state.get().current_commit_idx)
+    assert.are.equal("current_commit", state.scope_mode())
+
+    ui.toggle_stack_view()
+    assert.is_nil(state.get().current_commit_idx)
+    assert.are.equal("all", state.scope_mode())
 
     ui.open()
 
@@ -1072,6 +1133,46 @@ describe("review.ui help", function()
     end
   end)
 
+  it("refreshes remote comments after a local refresh when forge context exists", function()
+    local review = require("review")
+    local state = require("review.state")
+    local original_refresh_local_session = review.refresh_local_session
+    local original_refresh_comments = review.refresh_comments
+    local original_refresh = ui.refresh
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.set_forge_info({ forge = "github", pr_number = 19 })
+
+    local local_calls = 0
+    local comment_calls = 0
+    local ui_refresh_calls = 0
+    review.refresh_local_session = function()
+      local_calls = local_calls + 1
+      return true
+    end
+    review.refresh_comments = function()
+      comment_calls = comment_calls + 1
+    end
+    ui.refresh = function()
+      ui_refresh_calls = ui_refresh_calls + 1
+    end
+
+    local ok, err = pcall(function()
+      ui.refresh_session()
+
+      assert.are.equal(1, local_calls)
+      assert.are.equal(1, comment_calls)
+      assert.are.equal(0, ui_refresh_calls)
+    end)
+
+    review.refresh_local_session = original_refresh_local_session
+    review.refresh_comments = original_refresh_comments
+    ui.refresh = original_refresh
+    assert.is_true(ok, err)
+  end)
+
   it("wraps long help entries on narrow terminals", function()
     local original_columns = vim.o.columns
     vim.o.columns = 58
@@ -1090,7 +1191,7 @@ describe("review.ui help", function()
     assert.is_true(vim.tbl_contains(lines, "      Copy local notes, open threads, and"))
     assert.is_true(vim.tbl_contains(lines, "      discussion"))
     assert.is_true(joined:match(":ReviewRefresh") ~= nil)
-    assert.is_true(joined:match("Refresh remote PR/MR comments") ~= nil)
+    assert.is_true(joined:match("Refresh review data") ~= nil)
 
     for _, line in ipairs(lines) do
       assert.is_true(vim.fn.strdisplaywidth(line) <= cfg.width)
@@ -1308,6 +1409,101 @@ describe("review.ui notes list", function()
     local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
     assert.is_true(vim.tbl_contains(lines, " Open Threads (1)"))
     assert.is_true(vim.tbl_contains(lines, " Discussion (1)"))
+  end)
+
+  it("publishes GitButler notes to their branch PR targets only", function()
+    local gitbutler = require("review.gitbutler")
+    local forge = require("review.forge")
+    local original_resolve_target = gitbutler.resolve_review_target
+    local original_resolve_context = forge.resolve_context
+    local original_post_comment = forge.post_comment
+    local original_refresh = ui.refresh
+
+    state.create("local", "gitbutler/workspace", {
+      { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/b.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+      { path = "scratch.lua", status = "A", hunks = { sample_hunk(1, 1) } },
+    }, {
+      vcs = "gitbutler",
+      repo_root = require("review.git").root(),
+      branch = require("review.git").current_branch() or "HEAD",
+      gitbutler = {},
+    })
+    state.set_commits({
+      {
+        sha = "branch-a",
+        short_sha = "brancha",
+        message = "feature/a",
+        files = { { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } } },
+        gitbutler = { kind = "branch", branch_name = "feature/a", review_id = "(#11)" },
+      },
+      {
+        sha = "branch-b",
+        short_sha = "branchb",
+        message = "feature/b",
+        files = { { path = "lua/b.lua", status = "M", hunks = { sample_hunk(4, 4) } } },
+        gitbutler = { kind = "branch", branch_name = "feature/b" },
+      },
+      {
+        sha = "gitbutler-unassigned",
+        short_sha = "unassgn",
+        message = "unassigned changes",
+        files = { { path = "scratch.lua", status = "A", hunks = { sample_hunk(1, 1) } } },
+        gitbutler = { kind = "unassigned" },
+      },
+    })
+
+    state.set_commit(1)
+    state.set_scope_mode("current_commit")
+    state.add_note("lua/a.lua", 2, "note a", nil, "new")
+    state.toggle_staged(state.get_notes()[1].id)
+    state.set_commit(2)
+    state.add_note("lua/b.lua", 4, "note b", nil, "new")
+    state.toggle_staged(state.get_notes()[2].id)
+    state.set_commit(3)
+    state.add_note("scratch.lua", 1, "note unassigned", nil, "new")
+    state.toggle_staged(state.get_notes()[3].id)
+
+    gitbutler.resolve_review_target = function(scope)
+      if scope.kind == "unassigned" then
+        return nil, "unassigned GitButler changes do not have a remote review target"
+      end
+      if scope.branch_name == "feature/a" then
+        return { forge = "github", owner = "pesap", repo = "review.nvim", pr_number = 11, branch_name = "feature/a" }
+      end
+      if scope.branch_name == "feature/b" then
+        return { forge = "github", owner = "pesap", repo = "review.nvim", pr_number = 12, branch_name = "feature/b" }
+      end
+      return nil, "unexpected scope"
+    end
+    forge.resolve_context = function(info)
+      return { commit_id = "head" .. tostring(info.pr_number) }, nil
+    end
+    local posted = {}
+    forge.post_comment = function(info, note, ctx)
+      table.insert(posted, { pr = info.pr_number, note = note.body, commit = ctx.commit_id })
+      return "https://example.test/" .. tostring(info.pr_number) .. "/" .. tostring(note.id), nil
+    end
+    ui.refresh = function() end
+
+    local ok, err = pcall(function()
+      ui.open_notes_list()
+      send_keys("P")
+
+      assert.are.equal(2, #posted)
+      assert.are.equal(11, posted[1].pr)
+      assert.are.equal(12, posted[2].pr)
+      local remaining = state.get_notes()
+      assert.are.equal(1, #remaining)
+      assert.are.equal("note unassigned", remaining[1].body)
+      assert.are.equal("staged", remaining[1].status)
+    end)
+
+    gitbutler.resolve_review_target = original_resolve_target
+    forge.resolve_context = original_resolve_context
+    forge.post_comment = original_post_comment
+    ui.refresh = original_refresh
+    assert.is_true(ok, err)
   end)
 
   it("keeps the notes list open while refreshing remote comments", function()

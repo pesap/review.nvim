@@ -339,6 +339,70 @@ describe("review open session metadata", function()
     assert.is_nil(state.get().requested_ref)
   end)
 
+  it("opens GitButler workspace mode before default-branch diff mode", function()
+    local git_module = package.loaded["review.git"]
+    local gitbutler = require("review.gitbutler")
+    local ui = require("review.ui")
+    local original_ui_open = ui.open
+    local original_git_root = git_module.root
+    local original_default_branch = git_module.default_branch
+    local original_parse_remote = git_module.parse_remote
+    local original_gitbutler_is_workspace = gitbutler.is_workspace
+    local original_workspace_review = gitbutler.workspace_review
+
+    state.destroy()
+    git_module.root = function()
+      return "/tmp/review-spec"
+    end
+    git_module.current_branch = function()
+      return "gitbutler/workspace"
+    end
+    git_module.default_branch = function()
+      return "main"
+    end
+    git_module.parse_remote = function()
+      return nil
+    end
+    gitbutler.is_workspace = function()
+      return true
+    end
+    gitbutler.workspace_review = function()
+      return {
+        files = {
+          { path = "lua/gb.lua", status = "M", hunks = {} },
+        },
+        untracked_files = {},
+        commits = {
+          {
+            sha = "gitbutler-unassigned",
+            short_sha = "unassgn",
+            message = "unassigned changes",
+            files = {},
+            gitbutler = { kind = "unassigned" },
+          },
+        },
+        metadata = { mergeBase = { commitId = "base123" } },
+      }
+    end
+    ui.open = function() end
+
+    local ok, err = pcall(function()
+      review.open({})
+
+      assert.are.equal("gitbutler", state.get().vcs)
+      assert.are.equal("base123", state.get().base_ref)
+      assert.are.equal("gitbutler-unassigned", state.get().commits[1].sha)
+    end)
+
+    ui.open = original_ui_open
+    git_module.root = original_git_root
+    git_module.default_branch = original_default_branch
+    git_module.parse_remote = original_parse_remote
+    gitbutler.is_workspace = original_gitbutler_is_workspace
+    gitbutler.workspace_review = original_workspace_review
+    assert.is_true(ok, err)
+  end)
+
   it("refreshes a local session in place without changing the requested ref semantics", function()
     local git_module = package.loaded["review.git"]
 

@@ -60,9 +60,9 @@ end, {
 })
 
 vim.api.nvim_create_user_command("ReviewRefresh", function()
-  require("review").refresh_comments()
+  require("review.ui").refresh_session()
 end, {
-  desc = "Re-fetch PR/MR comments from remote",
+  desc = "Refresh review data",
 })
 
 vim.api.nvim_create_user_command("ReviewNotes", function()
