@@ -3,7 +3,27 @@ local M = {}
 
 local cached_root = nil
 local cached_head_exists = nil
-local cached_gitbutler_workspace = nil
+local context_cache = {
+  diff = {},
+  log = {},
+  merge_base = {},
+  commit_diff = {},
+  blame = {},
+  file_history = {},
+  file_show = {},
+  commit_details = {},
+}
+local context_cache_signature = nil
+local pending_context = {
+  diff = {},
+  log = {},
+  merge_base = {},
+  blame = {},
+  commit_diff = {},
+  file_history = {},
+  file_show = {},
+  commit_details = {},
+}
 local build_untracked_file
 
 ---@param cmd string[]
@@ -34,17 +54,167 @@ local function run_system(cmd)
   return out, nil
 end
 
----@param section string
----@param entry table
+---@param stdout string|nil
+---@return string[]
+local function stdout_lines(stdout)
+  if not stdout or stdout == "" then
+    return {}
+  end
+  local lines = vim.split(stdout, "\n", { plain = true })
+  if lines[#lines] == "" then
+    table.remove(lines)
+  end
+  return lines
+end
+
+---@param clear_pending boolean|nil
+local function reset_context_cache(clear_pending)
+  context_cache = {
+    diff = {},
+    log = {},
+    merge_base = {},
+    commit_diff = {},
+    blame = {},
+    file_history = {},
+    file_show = {},
+    commit_details = {},
+  }
+  if clear_pending then
+    pending_context = {
+      diff = {},
+      log = {},
+      merge_base = {},
+      blame = {},
+      commit_diff = {},
+      file_history = {},
+      file_show = {},
+      commit_details = {},
+    }
+  end
+end
+
+---@param bucket table<string, function[]>
+---@param key string
+---@param callback function
+---@return boolean already_pending
+local function queue_pending(bucket, key, callback)
+  if bucket[key] then
+    table.insert(bucket[key], callback)
+    return true
+  end
+  bucket[key] = { callback }
+  return false
+end
+
+---@param bucket table<string, function[]>
+---@param key string
+---@return function[]
+local function take_pending(bucket, key)
+  local callbacks = bucket[key] or {}
+  bucket[key] = nil
+  return callbacks
+end
+
 ---@return string
-local function section_status(section, entry)
-  if section == "staged" then
-    return entry.index_status
+local function context_signature()
+  local status = run_systemlist({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=normal" }) or {}
+  local head = run_systemlist({ "git", "rev-parse", "--verify", "HEAD" })
+  return table.concat(status, "\n") .. "\nHEAD:" .. tostring(head and head[1] or "")
+end
+
+---@return string
+local function ensure_context_cache_current()
+  local signature = context_signature()
+  if context_cache_signature == nil then
+    context_cache_signature = signature
+    return signature
   end
-  if section == "unstaged" then
-    return entry.worktree_status
+  if context_cache_signature ~= signature then
+    reset_context_cache(false)
+    context_cache_signature = signature
   end
-  return "?"
+  return signature
+end
+
+---@param ref string|nil
+---@return string
+local function resolved_ref(ref)
+  local target = ref or "HEAD"
+  local out = run_systemlist({ "git", "rev-parse", "--verify", target })
+  return out and out[1] or target
+end
+
+---@param lines string[]|nil
+---@return string[]
+local function parse_blame_porcelain(lines)
+  local out = {}
+  local current = nil
+  for _, line in ipairs(lines or {}) do
+    local sha, _orig_lnum, final_lnum = line:match("^(%S+)%s+(%d+)%s+(%d+)")
+    if sha then
+      current = {
+        sha = sha,
+        line = tonumber(final_lnum) or 0,
+        author = "",
+        date = "",
+        summary = "",
+      }
+    elseif current then
+      local author = line:match("^author (.*)$")
+      if author then
+        current.author = author
+      end
+
+      local author_time = tonumber(line:match("^author%-time (%d+)$") or "")
+      if author_time then
+        current.date = os.date("%Y-%m-%d", author_time) or ""
+      end
+
+      local summary = line:match("^summary (.*)$")
+      if summary then
+        current.summary = summary
+      end
+
+      local code = line:match("^\t(.*)$")
+      if code then
+        local summary_prefix = current.summary ~= "" and (current.summary .. " | ") or ""
+        table.insert(
+          out,
+          string.format(
+            "%s (%s %s %d) %s%s",
+            current.sha,
+            current.author,
+            current.date,
+            current.line,
+            summary_prefix,
+            code
+          )
+        )
+        current = nil
+      end
+    end
+  end
+  return out
+end
+
+---@param cmd string[]
+---@param callback fun(lines: string[]|nil, err: string|nil)
+local function run_systemlist_async(cmd, callback)
+  if not cmd[1] or vim.fn.executable(cmd[1]) ~= 1 then
+    callback(nil, string.format("%s is not executable", cmd[1] or "command"))
+    return
+  end
+  vim.system(
+    cmd,
+    { text = true },
+    vim.schedule_wrap(function(obj)
+      if obj.code ~= 0 then
+        callback(nil, obj.stderr ~= "" and obj.stderr or obj.stdout)
+        return
+      end
+      callback(stdout_lines(obj.stdout), nil)
+    end)
+  )
 end
 
 --- Get the git repository root for the current directory (cached).
@@ -74,7 +244,7 @@ end
 --- Return a cheap signature for the current workspace state.
 ---@return string
 function M.workspace_signature()
-  local out = run_systemlist({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=all" })
+  local out = run_systemlist({ "git", "status", "--porcelain=v1", "--branch", "--untracked-files=normal" })
   if not out then
     return ""
   end
@@ -122,6 +292,42 @@ function M.diff(ref)
   return out
 end
 
+---@param ref string|nil
+---@param callback fun(diff_text: string, err: string|nil)
+function M.diff_async(ref, callback)
+  local key = tostring(ref or "HEAD")
+  if queue_pending(pending_context.diff, key, callback) then
+    return
+  end
+  local cmd = { "git", "diff" }
+  if ref then
+    table.insert(cmd, ref)
+  end
+  if not cmd[1] or vim.fn.executable(cmd[1]) ~= 1 then
+    local err = string.format("%s is not executable", cmd[1] or "command")
+    for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+      cb("", err)
+    end
+    return
+  end
+  vim.system(
+    cmd,
+    { text = true },
+    vim.schedule_wrap(function(obj)
+      if obj.code ~= 0 then
+        local err = obj.stderr ~= "" and obj.stderr or obj.stdout
+        for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+          cb("", err)
+        end
+        return
+      end
+      for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+        cb(obj.stdout or "", nil)
+      end
+    end)
+  )
+end
+
 --- Get the remote URL for origin.
 ---@return string|nil url
 function M.remote_url()
@@ -136,15 +342,271 @@ end
 ---@param sha string  Commit SHA
 ---@return string diff_text
 function M.commit_diff(sha)
+  local key = tostring(sha or "")
+  if context_cache.commit_diff[key] ~= nil then
+    return context_cache.commit_diff[key]
+  end
   local out = run_system({ "git", "diff", sha .. "~1", sha })
   if not out then
     -- Might be the first commit (no parent), try show
     out = run_system({ "git", "show", "--format=", sha })
     if not out then
+      context_cache.commit_diff[key] = ""
       return ""
     end
   end
+  context_cache.commit_diff[key] = out
   return out
+end
+
+---@param sha string
+---@param callback fun(diff_text: string, err: string|nil)
+function M.commit_diff_async(sha, callback)
+  local key = tostring(sha or "")
+  if context_cache.commit_diff[key] ~= nil then
+    callback(context_cache.commit_diff[key], nil)
+    return
+  end
+  if queue_pending(pending_context.commit_diff, key, callback) then
+    return
+  end
+  if vim.fn.executable("git") ~= 1 then
+    local err = "git is not executable"
+    context_cache.commit_diff[key] = ""
+    for _, cb in ipairs(take_pending(pending_context.commit_diff, key)) do
+      cb("", err)
+    end
+    return
+  end
+
+  vim.system(
+    { "git", "diff", sha .. "~1", sha },
+    { text = true },
+    vim.schedule_wrap(function(obj)
+      if obj.code == 0 then
+        context_cache.commit_diff[key] = obj.stdout or ""
+        for _, cb in ipairs(take_pending(pending_context.commit_diff, key)) do
+          cb(context_cache.commit_diff[key], nil)
+        end
+        return
+      end
+
+      vim.system(
+        { "git", "show", "--format=", sha },
+        { text = true },
+        vim.schedule_wrap(function(show_obj)
+          if show_obj.code ~= 0 then
+            context_cache.commit_diff[key] = ""
+            local err = show_obj.stderr ~= "" and show_obj.stderr or show_obj.stdout
+            for _, cb in ipairs(take_pending(pending_context.commit_diff, key)) do
+              cb("", err)
+            end
+            return
+          end
+          context_cache.commit_diff[key] = show_obj.stdout or ""
+          for _, cb in ipairs(take_pending(pending_context.commit_diff, key)) do
+            cb(context_cache.commit_diff[key], nil)
+          end
+        end)
+      )
+    end)
+  )
+end
+
+---@param ref string|nil
+---@param path string
+---@return string[]|nil lines, string|nil err
+function M.blame(ref, path)
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, tostring(ref or "HEAD"), resolved_ref(ref), tostring(path or "") }, "::")
+  if context_cache.blame[key] then
+    return vim.deepcopy(context_cache.blame[key].lines), context_cache.blame[key].err
+  end
+  local cmd = { "git", "blame", "--line-porcelain" }
+  if ref and ref ~= "" then
+    table.insert(cmd, ref)
+  end
+  table.insert(cmd, "--")
+  table.insert(cmd, path)
+  local lines, err = run_systemlist(cmd)
+  local parsed = lines and parse_blame_porcelain(lines) or nil
+  context_cache.blame[key] = { lines = parsed and vim.deepcopy(parsed) or nil, err = err }
+  return parsed, err
+end
+
+---@param ref string|nil
+---@param path string
+---@param callback fun(lines: string[]|nil, err: string|nil)
+function M.blame_async(ref, path, callback)
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, tostring(ref or "HEAD"), resolved_ref(ref), tostring(path or "") }, "::")
+  if context_cache.blame[key] then
+    callback(vim.deepcopy(context_cache.blame[key].lines), context_cache.blame[key].err)
+    return
+  end
+  if queue_pending(pending_context.blame, key, callback) then
+    return
+  end
+  local cmd = { "git", "blame", "--line-porcelain" }
+  if ref and ref ~= "" then
+    table.insert(cmd, ref)
+  end
+  table.insert(cmd, "--")
+  table.insert(cmd, path)
+  run_systemlist_async(cmd, function(lines, err)
+    local parsed = lines and parse_blame_porcelain(lines) or nil
+    context_cache.blame[key] = { lines = parsed and vim.deepcopy(parsed) or nil, err = err }
+    for _, cb in ipairs(take_pending(pending_context.blame, key)) do
+      cb(parsed and vim.deepcopy(parsed) or nil, err)
+    end
+  end)
+end
+
+---@param path string
+---@return string[]|nil lines, string|nil err
+function M.file_history(path)
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, resolved_ref("HEAD"), tostring(path or "") }, "::")
+  if context_cache.file_history[key] then
+    return vim.deepcopy(context_cache.file_history[key].lines), context_cache.file_history[key].err
+  end
+  local lines, err = run_systemlist({
+    "git",
+    "log",
+    "--follow",
+    "--date=short",
+    "--pretty=format:%h%x09%ad%x09%an%x09%s",
+    "--",
+    path,
+  })
+  context_cache.file_history[key] = { lines = lines and vim.deepcopy(lines) or nil, err = err }
+  return lines, err
+end
+
+---@param path string
+---@param callback fun(lines: string[]|nil, err: string|nil)
+function M.file_history_async(path, callback)
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, resolved_ref("HEAD"), tostring(path or "") }, "::")
+  if context_cache.file_history[key] then
+    callback(vim.deepcopy(context_cache.file_history[key].lines), context_cache.file_history[key].err)
+    return
+  end
+  if queue_pending(pending_context.file_history, key, callback) then
+    return
+  end
+  run_systemlist_async({
+    "git",
+    "log",
+    "--follow",
+    "--date=short",
+    "--pretty=format:%h%x09%ad%x09%an%x09%s",
+    "--",
+    path,
+  }, function(lines, err)
+    context_cache.file_history[key] = { lines = lines and vim.deepcopy(lines) or nil, err = err }
+    for _, cb in ipairs(take_pending(pending_context.file_history, key)) do
+      cb(lines and vim.deepcopy(lines) or nil, err)
+    end
+  end)
+end
+
+---@param sha string
+---@param path string
+---@return string|nil diff_text, string|nil err
+function M.file_show(sha, path)
+  local key = table.concat({ tostring(sha or ""), tostring(path or "") }, "::")
+  if context_cache.file_show[key] ~= nil then
+    return context_cache.file_show[key]
+  end
+  local diff_text, err = run_system({ "git", "show", "--format=", "--patch", sha, "--", path })
+  context_cache.file_show[key] = diff_text
+  return diff_text, err
+end
+
+---@param sha string
+---@param path string
+---@param callback fun(diff_text: string|nil, err: string|nil)
+function M.file_show_async(sha, path, callback)
+  local key = table.concat({ tostring(sha or ""), tostring(path or "") }, "::")
+  if context_cache.file_show[key] ~= nil then
+    callback(context_cache.file_show[key], nil)
+    return
+  end
+  if queue_pending(pending_context.file_show, key, callback) then
+    return
+  end
+  if vim.fn.executable("git") ~= 1 then
+    local err = "git is not executable"
+    for _, cb in ipairs(take_pending(pending_context.file_show, key)) do
+      cb(nil, err)
+    end
+    return
+  end
+  vim.system(
+    { "git", "show", "--format=", "--patch", sha, "--", path },
+    { text = true },
+    vim.schedule_wrap(function(obj)
+      if obj.code ~= 0 then
+        local err = obj.stderr ~= "" and obj.stderr or obj.stdout
+        for _, cb in ipairs(take_pending(pending_context.file_show, key)) do
+          cb(nil, err)
+        end
+        return
+      end
+      context_cache.file_show[key] = obj.stdout or ""
+      for _, cb in ipairs(take_pending(pending_context.file_show, key)) do
+        cb(context_cache.file_show[key], nil)
+      end
+    end)
+  )
+end
+
+---@param sha string
+---@return string[]|nil lines, string|nil err
+function M.commit_details(sha)
+  local key = tostring(sha or "")
+  if context_cache.commit_details[key] then
+    return vim.deepcopy(context_cache.commit_details[key].lines), context_cache.commit_details[key].err
+  end
+  local lines, err = run_systemlist({
+    "git",
+    "show",
+    "--stat",
+    "--name-status",
+    "--date=short",
+    "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%B",
+    sha,
+  })
+  context_cache.commit_details[key] = { lines = lines and vim.deepcopy(lines) or nil, err = err }
+  return lines, err
+end
+
+---@param sha string
+---@param callback fun(lines: string[]|nil, err: string|nil)
+function M.commit_details_async(sha, callback)
+  local key = tostring(sha or "")
+  if context_cache.commit_details[key] then
+    callback(vim.deepcopy(context_cache.commit_details[key].lines), context_cache.commit_details[key].err)
+    return
+  end
+  if queue_pending(pending_context.commit_details, key, callback) then
+    return
+  end
+  run_systemlist_async({
+    "git",
+    "show",
+    "--stat",
+    "--name-status",
+    "--date=short",
+    "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%B",
+    sha,
+  }, function(lines, err)
+    context_cache.commit_details[key] = { lines = lines and vim.deepcopy(lines) or nil, err = err }
+    for _, cb in ipairs(take_pending(pending_context.commit_details, key)) do
+      cb(lines and vim.deepcopy(lines) or nil, err)
+    end
+  end)
 end
 
 ---@return string[]
@@ -173,116 +635,73 @@ function M.head_exists()
   return cached_head_exists
 end
 
----@return table[]
-function M.status_entries()
-  local out = run_systemlist({ "git", "status", "--porcelain=v1", "--untracked-files=all" })
-  if not out then
-    return {}
-  end
-
-  local entries = {}
-  for _, line in ipairs(out) do
-    if line ~= "" then
-      local xy = line:sub(1, 2)
-      local raw_path = line:sub(4)
-      local original_path, path = raw_path:match("^(.-) %-%> (.+)$")
-      path = path or raw_path
-      local index_status = xy:sub(1, 1)
-      local worktree_status = xy:sub(2, 2)
-      local untracked = xy == "??"
-      local ignored = xy == "!!"
-      if not ignored then
-        table.insert(entries, {
-          path = path,
-          original_path = original_path,
-          xy = xy,
-          index_status = index_status,
-          worktree_status = worktree_status,
-          staged = not untracked and index_status ~= " ",
-          unstaged = not untracked and worktree_status ~= " ",
-          untracked = untracked,
-          deleted = index_status == "D" or worktree_status == "D",
-          renamed = index_status == "R" or worktree_status == "R",
-        })
-      end
-    end
-  end
-
-  table.sort(entries, function(a, b)
-    if a.path == b.path then
-      return a.xy < b.xy
-    end
-    return a.path < b.path
-  end)
-
-  return entries
+---@return string|nil
+function M.current_head()
+  local out = run_systemlist({ "git", "rev-parse", "--verify", "HEAD" })
+  return out and out[1] or nil
 end
 
----@param path string
----@return table|nil
-function M.status_entry(path)
-  if not path or path == "" then
+---@param base_ref string|nil
+---@param head_ref string|nil
+---@return string|nil sha
+function M.merge_base(base_ref, head_ref)
+  if not base_ref or base_ref == "" then
     return nil
   end
-  for _, entry in ipairs(M.status_entries()) do
-    if entry.path == path then
-      return entry
-    end
+  head_ref = head_ref or "HEAD"
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, resolved_ref(base_ref), resolved_ref(head_ref) }, "::")
+  if context_cache.merge_base[key] ~= nil then
+    return context_cache.merge_base[key] ~= false and context_cache.merge_base[key] or nil
   end
-  return nil
+  local out = run_systemlist({ "git", "merge-base", base_ref, head_ref })
+  local sha = out and out[1] or nil
+  context_cache.merge_base[key] = sha or false
+  return sha
 end
 
----@return {staged: table[], unstaged: table[], untracked: table[]}
-function M.status_sections()
-  local diff_mod = require("review.diff")
-  local sections = {
-    staged = {},
-    unstaged = {},
-    untracked = {},
-  }
-
-  for _, entry in ipairs(M.status_entries()) do
-    if entry.untracked then
-      local file = build_untracked_file(entry.path)
-      file.git_section = "untracked"
-      file.git_status = "?"
-      file.git_status_entry = entry
-      table.insert(sections.untracked, file)
-    else
-      for _, section in ipairs({ "staged", "unstaged" }) do
-        local include = (section == "staged" and entry.staged) or (section == "unstaged" and entry.unstaged)
-        if include then
-          local cmd = { "git", "diff" }
-          if section == "staged" then
-            table.insert(cmd, "--cached")
-          end
-          table.insert(cmd, "--")
-          table.insert(cmd, entry.path)
-          local diff_text = run_system(cmd) or ""
-          local parsed = diff_mod.parse(diff_text)
-          local file = parsed[1]
-            or {
-              path = entry.path,
-              status = section_status(section, entry),
-              hunks = {},
-            }
-          file.path = file.path ~= "" and file.path or entry.path
-          file.status = section_status(section, entry)
-          file.git_section = section
-          file.git_status = section_status(section, entry)
-          file.git_status_entry = entry
-          table.insert(sections[section], file)
-        end
-      end
-    end
+---@param base_ref string|nil
+---@param head_ref string|nil
+---@param callback fun(sha: string|nil, err: string|nil)
+function M.merge_base_async(base_ref, head_ref, callback)
+  if not base_ref or base_ref == "" then
+    callback(nil, nil)
+    return
   end
-
-  return sections
+  head_ref = head_ref or "HEAD"
+  local signature = ensure_context_cache_current()
+  local key = table.concat({ signature, resolved_ref(base_ref), resolved_ref(head_ref) }, "::")
+  if context_cache.merge_base[key] ~= nil then
+    callback(context_cache.merge_base[key] ~= false and context_cache.merge_base[key] or nil, nil)
+    return
+  end
+  if queue_pending(pending_context.merge_base, key, callback) then
+    return
+  end
+  run_systemlist_async({ "git", "merge-base", base_ref, head_ref }, function(lines, err)
+    local sha = lines and lines[1] or nil
+    context_cache.merge_base[key] = sha or false
+    for _, cb in ipairs(take_pending(pending_context.merge_base, key)) do
+      cb(sha, err)
+    end
+  end)
 end
 
 ---@param path string
 ---@return ReviewFile
-build_untracked_file = function(path)
+function M.untracked_file_placeholder(path)
+  return {
+    path = path,
+    status = "?",
+    untracked = true,
+    untracked_lazy = true,
+    hunks = {},
+  }
+end
+
+---@param path string
+---@return ReviewFile
+function M.build_untracked_file(path)
   local root = M.root()
   local abs_path = root and (root .. "/" .. path) or path
   local ok, lines = pcall(vim.fn.readfile, abs_path)
@@ -305,6 +724,7 @@ build_untracked_file = function(path)
     path = path,
     status = "?",
     untracked = true,
+    untracked_lazy = false,
     hunks = {
       {
         header = string.format("@@ -0,0 +1,%d @@", line_count),
@@ -318,101 +738,38 @@ build_untracked_file = function(path)
   }
 end
 
+build_untracked_file = M.build_untracked_file
+
+---@param file ReviewFile
+---@return ReviewFile
+function M.hydrate_untracked_file(file)
+  if not file or not file.untracked or not file.untracked_lazy then
+    return file
+  end
+  local hydrated = M.build_untracked_file(file.path)
+  for key, value in pairs(hydrated) do
+    file[key] = value
+  end
+  file._review_cache = nil
+  return file
+end
+
 ---@return ReviewFile[]
 function M.untracked_files()
   local result = {}
   for _, path in ipairs(M.untracked_paths()) do
-    table.insert(result, build_untracked_file(path))
+    table.insert(result, M.untracked_file_placeholder(path))
   end
   return result
-end
-
----@return boolean
-function M.has_fugitive()
-  return vim.fn.exists(":Git") == 2
-end
-
----@return boolean
-function M.is_gitbutler_workspace()
-  if cached_gitbutler_workspace ~= nil then
-    return cached_gitbutler_workspace
-  end
-  if not M.root() then
-    cached_gitbutler_workspace = false
-    return false
-  end
-  local out = run_systemlist({ "but", "status", "-fv" })
-  cached_gitbutler_workspace = out ~= nil
-  return cached_gitbutler_workspace
-end
-
----@return string[]|nil
----@return string|nil
-function M.gitbutler_status_lines()
-  return run_systemlist({ "but", "status", "-fv" })
-end
-
----@return {buf:number, win:number}|nil
----@return string|nil
-function M.open_fugitive_status()
-  if not M.has_fugitive() then
-    return nil, "vim-fugitive is not installed"
-  end
-
-  local tab = vim.api.nvim_get_current_tabpage()
-
-  local ok, err = pcall(vim.cmd, "silent keepalt Git")
-  if not ok then
-    return nil, tostring(err)
-  end
-
-  local current_buf = vim.api.nvim_get_current_buf()
-  local current_name = vim.api.nvim_buf_get_name(current_buf)
-  local current_ft = vim.bo[current_buf].filetype
-  if current_name:match("^fugitive://") or current_ft == "fugitive" then
-    return {
-      buf = current_buf,
-      win = vim.api.nvim_get_current_win(),
-    }, nil
-  end
-
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if vim.api.nvim_win_is_valid(win) then
-      local buf = vim.api.nvim_win_get_buf(win)
-      local name = vim.api.nvim_buf_get_name(buf)
-      local ft = vim.bo[buf].filetype
-      if name:match("^fugitive://") or ft == "fugitive" then
-        return {
-          buf = buf,
-          win = win,
-        }, nil
-      end
-    end
-  end
-
-  return nil, "vim-fugitive did not open a Fugitive buffer"
 end
 
 --- List commits in a range.
 ---@param base_ref string  Base ref (e.g. "main", "HEAD~5")
 ---@param head_ref string|nil  Head ref (default: "HEAD")
 ---@return ReviewCommit[]
-function M.log(base_ref, head_ref)
-  head_ref = head_ref or "HEAD"
-  local range = base_ref .. ".." .. head_ref
-  -- Format: sha<TAB>short_msg<TAB>author_name
-  local out = run_systemlist({
-    "git",
-    "log",
-    "--format=%H\t%s\t%an",
-    range,
-  })
-  if not out then
-    return {}
-  end
-
+local function parse_log_lines(out)
   local commits = {}
-  for _, line in ipairs(out) do
+  for _, line in ipairs(out or {}) do
     local sha, message, author = line:match("^(%S+)\t(.-)\t(.+)$")
     if sha then
       table.insert(commits, {
@@ -426,85 +783,65 @@ function M.log(base_ref, head_ref)
   return commits
 end
 
----@param path string
----@return boolean ok
----@return string|nil err
-function M.stage_path(path)
-  local _, err = run_system({ "git", "add", "--", path })
-  return err == nil, err
-end
-
----@param path string
----@param opts table|nil
----@return boolean ok
----@return string|nil err
-function M.unstage_path(path, opts)
-  opts = opts or {}
-  if opts.new_file or not M.head_exists() then
-    local _, err = run_system({ "git", "rm", "--cached", "--quiet", "--", path })
-    return err == nil, err
+function M.log(base_ref, head_ref)
+  head_ref = head_ref or "HEAD"
+  local signature = ensure_context_cache_current()
+  local range = base_ref .. ".." .. head_ref
+  local key = table.concat({ signature, range, resolved_ref(base_ref), resolved_ref(head_ref) }, "::")
+  if context_cache.log[key] then
+    return vim.deepcopy(context_cache.log[key])
   end
-  local _, err = run_system({ "git", "reset", "--quiet", "HEAD", "--", path })
-  return err == nil, err
-end
-
----@param path string
----@return boolean ok
----@return string|nil err
-function M.restore_path(path)
-  local _, err = run_system({ "git", "restore", "--worktree", "--", path })
-  return err == nil, err
-end
-
----@param path string
----@return boolean ok
----@return string|nil err
-function M.restore_staged_path(path)
-  local _, err = run_system({ "git", "restore", "--staged", "--worktree", "--source=HEAD", "--", path })
-  return err == nil, err
-end
-
----@param path string
----@return boolean ok
----@return string|nil err
-function M.remove_path(path)
-  local root = M.root()
-  local target = root and (root .. "/" .. path) or path
-  local ok, err = pcall(vim.fn.delete, target)
-  if not ok or err ~= 0 then
-    return false, "Could not delete file"
-  end
-  return true, nil
-end
-
----@param message string|nil
----@param opts table|nil
----@return boolean ok
----@return string|nil err
-function M.commit(message, opts)
-  opts = opts or {}
-  local cmd = { "git", "commit" }
-  if opts.amend then
-    table.insert(cmd, "--amend")
+  -- Format: sha<TAB>short_msg<TAB>author_name
+  local out = run_systemlist({
+    "git",
+    "log",
+    "--format=%H\t%s\t%an",
+    range,
+  })
+  if not out then
+    context_cache.log[key] = {}
+    return {}
   end
 
-  if message and message:match("%S") then
-    table.insert(cmd, "-m")
-    table.insert(cmd, message)
-  elseif opts.amend then
-    table.insert(cmd, "--no-edit")
-  end
-
-  local _, err = run_system(cmd)
-  return err == nil, err
+  local commits = parse_log_lines(out)
+  context_cache.log[key] = vim.deepcopy(commits)
+  return commits
 end
 
----@param sha string
----@return boolean ok
----@return string|nil err
-function M.fixup_commit(sha)
-  local _, err = run_system({ "git", "commit", "--fixup=" .. sha })
-  return err == nil, err
+---@param base_ref string
+---@param head_ref string|nil
+---@param callback fun(commits: table[], err: string|nil)
+function M.log_async(base_ref, head_ref, callback)
+  head_ref = head_ref or "HEAD"
+  local signature = ensure_context_cache_current()
+  local range = base_ref .. ".." .. head_ref
+  local key = table.concat({ signature, range, resolved_ref(base_ref), resolved_ref(head_ref) }, "::")
+  if context_cache.log[key] then
+    callback(vim.deepcopy(context_cache.log[key]), nil)
+    return
+  end
+  if queue_pending(pending_context.log, key, callback) then
+    return
+  end
+  run_systemlist_async({
+    "git",
+    "log",
+    "--format=%H\t%s\t%an",
+    range,
+  }, function(lines, err)
+    if not lines then
+      context_cache.log[key] = {}
+      for _, cb in ipairs(take_pending(pending_context.log, key)) do
+        cb({}, err)
+      end
+      return
+    end
+    local commits = parse_log_lines(lines)
+    context_cache.log[key] = vim.deepcopy(commits)
+    for _, cb in ipairs(take_pending(pending_context.log, key)) do
+      cb(vim.deepcopy(commits), nil)
+    end
+  end)
 end
 
 --- Detect the forge provider from a hostname.
@@ -577,7 +914,8 @@ function M.invalidate_cache()
   cached_root = nil
   cached_default_branch = nil
   cached_head_exists = nil
-  cached_gitbutler_workspace = nil
+  context_cache_signature = nil
+  reset_context_cache(true)
 end
 
 return M

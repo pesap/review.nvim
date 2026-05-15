@@ -20,6 +20,28 @@ local function run_system(cmd)
   return out, nil
 end
 
+local function run_system_async(cmd, callback)
+  if test_runner then
+    local out, err = run_system(cmd)
+    callback(out, err)
+    return
+  end
+  if not vim.system then
+    local out, err = run_system(cmd)
+    callback(out, err)
+    return
+  end
+  vim.system(cmd, { text = true }, function(res)
+    vim.schedule(function()
+      if res.code ~= 0 then
+        callback(nil, res.stderr ~= "" and res.stderr or res.stdout)
+        return
+      end
+      callback(res.stdout or "", nil)
+    end)
+  end)
+end
+
 ---@param runner fun(cmd:string[]): string, integer|nil
 function M._set_runner(runner)
   test_runner = runner
@@ -36,6 +58,21 @@ local function run_json(cmd)
     return nil, "Failed to parse GitButler JSON"
   end
   return data, nil
+end
+
+local function run_json_async(cmd, callback)
+  run_system_async(cmd, function(out, err)
+    if not out then
+      callback(nil, err)
+      return
+    end
+    local ok, data = pcall(vim.fn.json_decode, out)
+    if not ok or type(data) ~= "table" then
+      callback(nil, "Failed to parse GitButler JSON")
+      return
+    end
+    callback(data, nil)
+  end)
 end
 
 local function current_root()
@@ -86,6 +123,28 @@ function M.status()
   cached_root = root
   cached_status = data
   return cached_status, nil
+end
+
+---@param callback fun(status: table|nil, err: string|nil)
+function M.status_async(callback)
+  local root = current_root()
+  if cached_status and cached_root == root then
+    callback(cached_status, nil)
+    return
+  end
+  if not M.available() then
+    callback(nil, "GitButler CLI is not installed")
+    return
+  end
+  run_json_async({ "but", "-j", "status" }, function(data, err)
+    if not data then
+      callback(nil, err)
+      return
+    end
+    cached_root = root
+    cached_status = data
+    callback(cached_status, nil)
+  end)
 end
 
 ---@return boolean
@@ -191,32 +250,6 @@ local function change_to_file(change, opts)
   return file
 end
 
----@param target string|nil
----@param opts table|nil
----@return ReviewFile[]|nil files
----@return string|nil err
-function M.diff_files(target, opts)
-  local cmd = { "but", "-j", "diff" }
-  if target then
-    table.insert(cmd, target)
-  end
-  local data, err = run_json(cmd)
-  if not data then
-    return nil, err
-  end
-  if type(data.changes) ~= "table" then
-    return nil, "GitButler diff output is missing changes"
-  end
-  local files = {}
-  for _, change in ipairs(data.changes) do
-    local path = change.path or change.filePath or ""
-    if not opts.paths_by_path or opts.paths_by_path[path] then
-      table.insert(files, change_to_file(change, opts))
-    end
-  end
-  return files, nil
-end
-
 local function change_key(file)
   local gb = file.gitbutler or {}
   local branch_key = gb.kind == "branch" and (gb.branch_cli_id or gb.branch_name or "branch") or (gb.kind or "")
@@ -242,6 +275,87 @@ local function merge_files(target, files)
   end
 end
 
+---@param target string|nil
+---@param opts table|nil
+---@return ReviewFile[]|nil files
+---@return string|nil err
+function M.diff_files(target, opts)
+  local cmd = { "but", "-j", "diff" }
+  if target then
+    table.insert(cmd, target)
+  end
+  local data, err = run_json(cmd)
+  if not data then
+    return nil, err
+  end
+  if type(data.changes) ~= "table" then
+    return nil, "GitButler diff output is missing changes"
+  end
+  local files = {}
+  for _, change in ipairs(data.changes) do
+    local path = change.path or change.filePath or ""
+    if not opts.paths_by_path or opts.paths_by_path[path] then
+      merge_files(files, { change_to_file(change, opts) })
+    end
+  end
+  return files, nil
+end
+
+---@param target string|nil
+---@param opts table|nil
+---@param callback fun(files: ReviewFile[]|nil, err: string|nil)
+function M.diff_files_async(target, opts, callback)
+  local cmd = { "but", "-j", "diff" }
+  if target then
+    table.insert(cmd, target)
+  end
+  run_json_async(cmd, function(data, err)
+    if not data then
+      callback(nil, err)
+      return
+    end
+    if type(data.changes) ~= "table" then
+      callback(nil, "GitButler diff output is missing changes")
+      return
+    end
+    local files = {}
+    opts = opts or {}
+    for _, change in ipairs(data.changes) do
+      local path = change.path or change.filePath or ""
+      if not opts.paths_by_path or opts.paths_by_path[path] then
+        merge_files(files, { change_to_file(change, opts) })
+      end
+    end
+    callback(files, nil)
+  end)
+end
+
+---@param branch table
+---@param files ReviewFile[]
+---@return table|nil scope
+local function scope_from_branch_files(branch, files)
+  if #files == 0 then
+    return nil
+  end
+  local first = branch.commits and branch.commits[1]
+  local sha = first and first.commitId or branch.cliId or branch.name
+  return {
+    sha = sha,
+    short_sha = (sha or branch.name):sub(1, 7),
+    message = branch.name,
+    author = first and first.authorName or "",
+    files = files,
+    gitbutler = {
+      kind = "branch",
+      branch_name = branch.name,
+      branch_cli_id = branch.cliId,
+      branch_status = branch.branchStatus,
+      review_id = denull(branch.reviewId),
+      unpublished = branch.branchStatus == "completelyUnpushed" or denull(branch.reviewId) == nil,
+    },
+  }
+end
+
 ---@param branch table
 ---@param extra_files ReviewFile[]|nil
 ---@return table|nil scope
@@ -262,26 +376,7 @@ local function branch_scope(branch, extra_files)
   if extra_files and #extra_files > 0 then
     merge_files(files, extra_files)
   end
-  if #files == 0 then
-    return nil, nil
-  end
-  local first = branch.commits and branch.commits[1]
-  local sha = first and first.commitId or branch.cliId or branch.name
-  return {
-    sha = sha,
-    short_sha = (sha or branch.name):sub(1, 7),
-    message = branch.name,
-    author = first and first.authorName or "",
-    files = files,
-    gitbutler = {
-      kind = "branch",
-      branch_name = branch.name,
-      branch_cli_id = branch.cliId,
-      branch_status = branch.branchStatus,
-      review_id = denull(branch.reviewId),
-      unpublished = branch.branchStatus == "completelyUnpushed" or denull(branch.reviewId) == nil,
-    },
-  }
+  return scope_from_branch_files(branch, files), nil
 end
 
 ---@return {files: ReviewFile[], untracked_files: ReviewFile[], commits: ReviewCommit[], metadata: table}|nil result
@@ -371,6 +466,164 @@ function M.workspace_review()
     commits = commits,
     metadata = status,
   }, nil
+end
+
+---@param callback fun(result: table|nil, err: string|nil)
+function M.workspace_review_async(callback)
+  M.status_async(function(status, err)
+    if not status then
+      callback(nil, err)
+      return
+    end
+
+    local files = {}
+    local commits = {}
+    local tasks = {}
+
+    for _, stack in ipairs(status.stacks or {}) do
+      local assigned_change_types = {}
+      for _, change in ipairs(stack.assignedChanges or {}) do
+        local path = change.filePath or change.path
+        if path then
+          assigned_change_types[path] = change.changeType or change.status
+        end
+      end
+
+      for branch_idx, branch in ipairs(stack.branches or {}) do
+        local branch_task = { kind = "branch", stack = stack, branch = branch }
+        table.insert(tasks, branch_task)
+        if branch_idx == #(stack.branches or {}) and next(assigned_change_types) ~= nil then
+          branch_task.assigned_task = {
+            kind = "assigned",
+            target = stack.cliId,
+            opts = {
+              paths_by_path = assigned_change_types,
+              change_types_by_path = assigned_change_types,
+              gitbutler = {
+                kind = "branch",
+                branch_name = branch.name,
+                branch_cli_id = branch.cliId,
+                branch_status = branch.branchStatus,
+                review_id = denull(branch.reviewId),
+                assigned = true,
+              },
+            },
+          }
+        end
+      end
+    end
+
+    local unassigned_change_types = {}
+    for _, change in ipairs(status.unassignedChanges or {}) do
+      local path = change.filePath or change.path
+      if path then
+        unassigned_change_types[path] = change.changeType or change.status
+      end
+    end
+    table.insert(tasks, {
+      kind = "unassigned",
+      target = nil,
+      opts = {
+        unassigned = true,
+        gitbutler = { kind = "unassigned" },
+        paths_by_path = unassigned_change_types,
+        change_types_by_path = unassigned_change_types,
+      },
+    })
+
+    local pending = #tasks
+    local first_err = nil
+    local finished = false
+
+    local function maybe_finish()
+      if finished or pending > 0 then
+        return
+      end
+      finished = true
+      if first_err then
+        callback(nil, first_err)
+        return
+      end
+
+      for _, task in ipairs(tasks) do
+        if task.kind == "branch" then
+          local branch_files = task.files or {}
+          if task.assigned_task and task.assigned_task.files and #task.assigned_task.files > 0 then
+            merge_files(branch_files, task.assigned_task.files)
+          end
+          local scope = scope_from_branch_files(task.branch, branch_files)
+          if scope then
+            scope.gitbutler.stack_cli_id = task.stack.cliId
+            table.insert(commits, scope)
+            merge_files(files, scope.files)
+          end
+        elseif task.kind == "unassigned" then
+          local unassigned = task.files or {}
+          if #unassigned > 0 then
+            merge_files(files, unassigned)
+            table.insert(commits, {
+              sha = "gitbutler-unassigned",
+              short_sha = "unassgn",
+              message = "unassigned changes",
+              author = "",
+              files = unassigned,
+              gitbutler = {
+                kind = "unassigned",
+                unpublished = true,
+              },
+            })
+          end
+        end
+      end
+
+      callback({
+        files = files,
+        untracked_files = {},
+        commits = commits,
+        metadata = status,
+      }, nil)
+    end
+
+    local function run_task(task)
+      M.diff_files_async(task.target or (task.branch and (task.branch.cliId or task.branch.name)), task.opts or {
+        gitbutler = task.branch and {
+          kind = "branch",
+          branch_name = task.branch.name,
+          branch_cli_id = task.branch.cliId,
+          branch_status = task.branch.branchStatus,
+          review_id = denull(task.branch.reviewId),
+        } or nil,
+      }, function(task_files, task_err)
+        if task_err and not first_err then
+          first_err = task_err
+        end
+        task.files = task_files or {}
+
+        if task.assigned_task then
+          M.diff_files_async(task.assigned_task.target, task.assigned_task.opts, function(assigned_files, assigned_err)
+            if assigned_err and not first_err then
+              first_err = assigned_err
+            end
+            task.assigned_task.files = assigned_files or {}
+            pending = pending - 1
+            maybe_finish()
+          end)
+        else
+          pending = pending - 1
+          maybe_finish()
+        end
+      end)
+    end
+
+    if pending == 0 then
+      callback({ files = {}, untracked_files = {}, commits = {}, metadata = status }, nil)
+      return
+    end
+
+    for _, task in ipairs(tasks) do
+      run_task(task)
+    end
+  end)
 end
 
 ---@param commit ReviewCommit|nil

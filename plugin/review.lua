@@ -65,6 +65,35 @@ end, {
   desc = "Refresh review data",
 })
 
+vim.api.nvim_create_user_command("ReviewChangeBase", function(opts)
+  require("review").change_base(opts.fargs[1])
+end, {
+  nargs = "?",
+  desc = "Re-diff the active local review against another base ref",
+  complete = function()
+    return {}
+  end,
+})
+
+vim.api.nvim_create_user_command("ReviewMarkBaseline", function()
+  require("review").mark_baseline()
+end, {
+  desc = "Mark current HEAD as the before-fix review baseline",
+})
+
+vim.api.nvim_create_user_command("ReviewCompareBaseline", function()
+  require("review").compare_baseline()
+end, {
+  desc = "Compare current review against the marked before-fix baseline",
+})
+
+vim.api.nvim_create_user_command("ReviewCompareUnit", function(opts)
+  require("review").compare_unit(opts.fargs[1])
+end, {
+  nargs = "?",
+  desc = "Compare selected/current review unit with another unit",
+})
+
 vim.api.nvim_create_user_command("ReviewNotes", function()
   require("review").open_notes()
 end, {

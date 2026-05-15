@@ -166,7 +166,7 @@ describe("parse_remote", function()
   end)
 end)
 
-describe("git status actions", function()
+describe("git repository context", function()
   local tempdir
   local original_cwd
 
@@ -206,203 +206,290 @@ describe("git status actions", function()
     git.invalidate_cache()
   end)
 
-  it("builds staged, unstaged, and untracked status sections", function()
-    write_file("lua/staged.lua", { "after staged" })
-    git_ok({ "git", "add", "lua/staged.lua" })
-
-    write_file("lua/unstaged.lua", { "after unstaged" })
-
-    write_file("lua/both.lua", { "after staged both", "after both" })
-    git_ok({ "git", "add", "lua/both.lua" })
-    write_file("lua/both.lua", { "after staged both", "after unstaged both" })
-
-    git_ok({ "git", "mv", "old/name.lua", "lua/renamed.lua" })
-    write_file("lua/new.lua", { "first", "second" })
-
-    local sections = git.status_sections()
-
-    assert.are.equal(3, #sections.staged)
-    assert.are.equal(2, #sections.unstaged)
-    assert.are.equal(1, #sections.untracked)
-
-    assert.are.same({ "lua/both.lua", "lua/renamed.lua", "lua/staged.lua" }, vim.tbl_map(function(file)
-      return file.path
-    end, sections.staged))
-    assert.are.same({ "M", "R", "M" }, vim.tbl_map(function(file)
-      return file.git_status
-    end, sections.staged))
-
-    assert.are.same({ "lua/both.lua", "lua/unstaged.lua" }, vim.tbl_map(function(file)
-      return file.path
-    end, sections.unstaged))
-    assert.are.same({ "M", "M" }, vim.tbl_map(function(file)
-      return file.git_status
-    end, sections.unstaged))
-
-    assert.are.equal("lua/new.lua", sections.untracked[1].path)
-    assert.are.equal("untracked", sections.untracked[1].git_section)
-    assert.are.equal("?", sections.untracked[1].git_status)
-    assert.are.equal(2, #sections.untracked[1].hunks[1].lines)
+  it("resolves the current HEAD commit", function()
+    local expected = vim.trim(git_ok({ "git", "rev-parse", "HEAD" }))
+    assert.are.equal(expected, git.current_head())
   end)
 
-  it("uses git reset to unstage tracked files", function()
-    write_file("lua/staged.lua", { "after staged" })
-    git_ok({ "git", "add", "lua/staged.lua" })
+  it("resolves merge-base synchronously and asynchronously", function()
+    local expected = vim.trim(git_ok({ "git", "merge-base", "HEAD", "HEAD" }))
+    assert.are.equal(expected, git.merge_base("HEAD", "HEAD"))
 
-    local ok, err = git.unstage_path("lua/staged.lua")
-    local status = vim.fn.systemlist({ "git", "status", "--porcelain", "--", "lua/staged.lua" })
-
-    assert.is_true(ok)
-    assert.is_nil(err)
-    assert.are.same({ " M lua/staged.lua" }, status)
+    local done = false
+    git.merge_base_async("HEAD", "HEAD", function(sha, err)
+      assert.is_nil(err)
+      assert.are.equal(expected, sha)
+      done = true
+    end)
+    vim.wait(1000, function()
+      return done
+    end)
+    assert.is_true(done)
   end)
 
-  it("uses git rm --cached to unstage new files", function()
-    write_file("lua/new.lua", { "brand new" })
-    git_ok({ "git", "add", "lua/new.lua" })
+  it("invalidates cached diffs when the workspace signature changes", function()
+    write_file("lua/unstaged.lua", { "first cached diff" })
+    local first = git.diff("HEAD")
+    assert.is_true(first:find("first cached diff", 1, true) ~= nil)
 
-    local ok, err = git.unstage_path("lua/new.lua", { new_file = true })
-    local status = vim.fn.systemlist({ "git", "status", "--porcelain", "--", "lua/new.lua" })
+    write_file("lua/unstaged.lua", { "second cached diff" })
+    local second = git.diff("HEAD")
 
-    assert.is_true(ok)
-    assert.is_nil(err)
-    assert.are.same({ "?? lua/new.lua" }, status)
-  end)
-
-  it("runs commit, amend, and fixup commands", function()
-    write_file("lua/staged.lua", { "commit one" })
-    git_ok({ "git", "add", "lua/staged.lua" })
-    assert.is_true(git.commit("ship it"))
-    local ship_sha = vim.trim(git_ok({ "git", "rev-parse", "HEAD" }))
-
-    write_file("lua/staged.lua", { "commit amend" })
-    git_ok({ "git", "add", "lua/staged.lua" })
-    assert.is_true(git.commit(nil, { amend = true }))
-    assert.are.equal("ship it", vim.trim(git_ok({ "git", "log", "-1", "--pretty=%s" })))
-
-    write_file("lua/staged.lua", { "commit fixup" })
-    git_ok({ "git", "add", "lua/staged.lua" })
-    assert.is_true(git.fixup_commit(ship_sha))
-    assert.are.equal("fixup! ship it", vim.trim(git_ok({ "git", "log", "-1", "--pretty=%s" })))
-  end)
-
-  it("deletes files relative to the repo root", function()
-    write_file("lua/obsolete.lua", { "remove me" })
-
-    local ok, err = git.remove_path("lua/obsolete.lua")
-
-    assert.is_true(ok)
-    assert.is_nil(err)
-    assert.are.equal(0, vim.fn.filereadable(tempdir .. "/lua/obsolete.lua"))
+    assert.is_true(second:find("second cached diff", 1, true) ~= nil)
+    assert.is_nil(second:find("first cached diff", 1, true))
   end)
 end)
 
-describe("gitbutler detection", function()
+describe("async git context", function()
   local original_executable
+  local original_system
 
   before_each(function()
     original_executable = vim.fn.executable
+    original_system = vim.system
+    git.invalidate_cache()
   end)
 
   after_each(function()
     vim.fn.executable = original_executable
+    vim.system = original_system
     git.invalidate_cache()
   end)
 
-  it("treats missing but as a non-GitButler repo", function()
+  it("loads file history asynchronously and caches the result", function()
+    local calls = 0
     vim.fn.executable = function(cmd)
-      if cmd == "but" then
-        return 0
-      end
-      return original_executable(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.equal("git", cmd[1])
+      assert.are.equal("lua/review.lua", cmd[#cmd])
+      callback({ code = 0, stdout = "abc1234\t2026-05-15\tps\tmessage\n", stderr = "" })
     end
 
-    assert.is_false(git.is_gitbutler_workspace())
+    local first
+    git.file_history_async("lua/review.lua", function(lines, err)
+      assert.is_nil(err)
+      first = lines
+    end)
+    vim.wait(100, function()
+      return first ~= nil
+    end)
+    assert.are.equal("abc1234\t2026-05-15\tps\tmessage", first[1])
 
-    local lines, err = git.gitbutler_status_lines()
-    assert.is_nil(lines)
-    assert.are.equal("but is not executable", err)
-  end)
-end)
-
-describe("open_fugitive_status", function()
-  local original_has_fugitive
-  local original_cmd
-  local original_get_current_tabpage
-  local original_get_current_buf
-  local original_get_current_win
-  local original_buf_get_name
-  local original_tabpage_list_wins
-  local original_win_is_valid
-  local original_win_get_buf
-  local original_filetype
-
-  before_each(function()
-    original_has_fugitive = git.has_fugitive
-    original_cmd = vim.cmd
-    original_get_current_tabpage = vim.api.nvim_get_current_tabpage
-    original_get_current_buf = vim.api.nvim_get_current_buf
-    original_get_current_win = vim.api.nvim_get_current_win
-    original_buf_get_name = vim.api.nvim_buf_get_name
-    original_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
-    original_win_is_valid = vim.api.nvim_win_is_valid
-    original_win_get_buf = vim.api.nvim_win_get_buf
-    original_filetype = vim.bo.filetype
+    local second
+    git.file_history_async("lua/review.lua", function(lines)
+      second = lines
+    end)
+    assert.are.equal("abc1234\t2026-05-15\tps\tmessage", second[1])
+    assert.are.equal(1, calls)
   end)
 
-  after_each(function()
-    git.has_fugitive = original_has_fugitive
-    vim.cmd = original_cmd
-    vim.api.nvim_get_current_tabpage = original_get_current_tabpage
-    vim.api.nvim_get_current_buf = original_get_current_buf
-    vim.api.nvim_get_current_win = original_get_current_win
-    vim.api.nvim_buf_get_name = original_buf_get_name
-    vim.api.nvim_tabpage_list_wins = original_tabpage_list_wins
-    vim.api.nvim_win_is_valid = original_win_is_valid
-    vim.api.nvim_win_get_buf = original_win_get_buf
+  it("loads diffs asynchronously without reusing stale worktree output", function()
+    local calls = 0
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.same({ "git", "diff", "main" }, cmd)
+      callback({ code = 0, stdout = "diff --git a/a b/a\n", stderr = "" })
+    end
+
+    local first
+    git.diff_async("main", function(diff_text, err)
+      assert.is_nil(err)
+      first = diff_text
+    end)
+    vim.wait(100, function()
+      return first ~= nil
+    end)
+    assert.are.equal("diff --git a/a b/a\n", first)
+
+    local second
+    git.diff_async("main", function(diff_text)
+      second = diff_text
+    end)
+    vim.wait(100, function()
+      return second ~= nil
+    end)
+    assert.are.equal(first, second)
+    assert.are.equal(2, calls)
   end)
 
-  it("returns an error when :Git does not open a fugitive buffer", function()
-    local current_buf = vim.api.nvim_create_buf(false, true)
-    local other_buf = vim.api.nvim_create_buf(false, true)
-
-    git.has_fugitive = function()
-      return true
+  it("coalesces duplicate in-flight async diff requests", function()
+    local calls = 0
+    local pending
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
     end
-    vim.cmd = function() end
-    vim.api.nvim_get_current_tabpage = function()
-      return 1
-    end
-    vim.api.nvim_get_current_buf = function()
-      return current_buf
-    end
-    vim.api.nvim_get_current_win = function()
-      return 22
-    end
-    vim.api.nvim_buf_get_name = function(buf)
-      if buf == current_buf then
-        return "regular-buffer"
-      end
-      if buf == other_buf then
-        return "other-regular-buffer"
-      end
-      return ""
-    end
-    vim.bo[current_buf].filetype = ""
-    vim.bo[other_buf].filetype = ""
-    vim.api.nvim_tabpage_list_wins = function()
-      return { 22, 33 }
-    end
-    vim.api.nvim_win_is_valid = function()
-      return true
-    end
-    vim.api.nvim_win_get_buf = function(win)
-      return win == 22 and current_buf or other_buf
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.same({ "git", "diff", "main" }, cmd)
+      pending = callback
     end
 
-    local opened, err = git.open_fugitive_status()
+    local first
+    local second
+    git.diff_async("main", function(diff_text, err)
+      assert.is_nil(err)
+      first = diff_text
+    end)
+    git.diff_async("main", function(diff_text, err)
+      assert.is_nil(err)
+      second = diff_text
+    end)
 
-    assert.is_nil(opened)
-    assert.are.equal("vim-fugitive did not open a Fugitive buffer", err)
+    assert.are.equal(1, calls)
+    assert.is_nil(first)
+    assert.is_nil(second)
+
+    pending({ code = 0, stdout = "diff --git a/a b/a\n", stderr = "" })
+    vim.wait(100, function()
+      return first ~= nil and second ~= nil
+    end)
+
+    assert.are.equal("diff --git a/a b/a\n", first)
+    assert.are.equal(first, second)
+  end)
+
+  it("loads file show asynchronously and coalesces duplicate requests", function()
+    local calls = 0
+    local pending
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.same({ "git", "show", "--format=", "--patch", "abc1234", "--", "lua/review.lua" }, cmd)
+      pending = callback
+    end
+
+    local first
+    local second
+    git.file_show_async("abc1234", "lua/review.lua", function(diff_text, err)
+      assert.is_nil(err)
+      first = diff_text
+    end)
+    git.file_show_async("abc1234", "lua/review.lua", function(diff_text, err)
+      assert.is_nil(err)
+      second = diff_text
+    end)
+
+    assert.are.equal(1, calls)
+    pending({ code = 0, stdout = "diff --git a/lua/review.lua b/lua/review.lua\n", stderr = "" })
+    vim.wait(100, function()
+      return first ~= nil and second ~= nil
+    end)
+
+    assert.are.equal(first, second)
+    assert.is_true(first:find("diff --git", 1, true) ~= nil)
+
+    local cached
+    git.file_show_async("abc1234", "lua/review.lua", function(diff_text)
+      cached = diff_text
+    end)
+    assert.are.equal(first, cached)
+    assert.are.equal(1, calls)
+  end)
+
+  it("loads commit diffs asynchronously and coalesces duplicate requests", function()
+    local calls = 0
+    local pending
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.same({ "git", "diff", "abc1234~1", "abc1234" }, cmd)
+      pending = callback
+    end
+
+    local first
+    local second
+    git.commit_diff_async("abc1234", function(diff_text, err)
+      assert.is_nil(err)
+      first = diff_text
+    end)
+    git.commit_diff_async("abc1234", function(diff_text, err)
+      assert.is_nil(err)
+      second = diff_text
+    end)
+
+    assert.are.equal(1, calls)
+    pending({ code = 0, stdout = "diff --git a/a b/a\n", stderr = "" })
+    vim.wait(100, function()
+      return first ~= nil and second ~= nil
+    end)
+
+    assert.are.equal(first, second)
+    assert.is_true(first:find("diff --git", 1, true) ~= nil)
+  end)
+
+  it("loads blame asynchronously with commit summaries", function()
+    local author_time = os.time({ year = 2026, month = 5, day = 15, hour = 12, min = 0, sec = 0 })
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      assert.are.same({ "git", "blame", "--line-porcelain", "main", "--", "lua/review.lua" }, cmd)
+      callback({
+        code = 0,
+        stdout = table.concat({
+          "abc123456789 2 2 1",
+          "author Reviewer",
+          "author-time " .. tostring(author_time),
+          "summary Explain old behavior",
+          "filename lua/review.lua",
+          "\told code",
+          "",
+        }, "\n"),
+        stderr = "",
+      })
+    end
+
+    local result
+    git.blame_async("main", "lua/review.lua", function(lines, err)
+      assert.is_nil(err)
+      result = lines
+    end)
+    vim.wait(100, function()
+      return result ~= nil
+    end)
+
+    assert.is_true(result[1]:find("Reviewer 2026-05-15 2", 1, true) ~= nil)
+    assert.is_true(result[1]:find("Explain old behavior | old code", 1, true) ~= nil)
+  end)
+
+  it("loads commit logs asynchronously and caches the result", function()
+    local calls = 0
+    vim.fn.executable = function(cmd)
+      return cmd == "git" and 1 or original_executable(cmd)
+    end
+    vim.system = function(cmd, opts, callback)
+      calls = calls + 1
+      assert.are.same({ "git", "log", "--format=%H\t%s\t%an", "main..HEAD" }, cmd)
+      callback({ code = 0, stdout = "abcdef1234567890\tPolish review\tpsanchez\n", stderr = "" })
+    end
+
+    local first
+    git.log_async("main", nil, function(commits, err)
+      assert.is_nil(err)
+      first = commits
+    end)
+    vim.wait(100, function()
+      return first ~= nil
+    end)
+    assert.are.equal("abcdef1234567890", first[1].sha)
+    assert.are.equal("abcdef1", first[1].short_sha)
+    assert.are.equal("Polish review", first[1].message)
+
+    local second
+    git.log_async("main", nil, function(commits)
+      second = commits
+    end)
+    assert.are.equal("abcdef1234567890", second[1].sha)
+    assert.are.equal(1, calls)
   end)
 end)

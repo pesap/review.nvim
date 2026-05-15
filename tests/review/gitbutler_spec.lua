@@ -111,6 +111,22 @@ describe("gitbutler adapter", function()
           },
         },
       },
+      {
+        path = "scratch.lua",
+        status = "modified",
+        diff = {
+          type = "patch",
+          hunks = {
+            {
+              oldStart = 3,
+              oldLines = 1,
+              newStart = 3,
+              newLines = 1,
+              diff = "@@ -3,1 +3,1 @@\n-old scratch\n+new scratch\n",
+            },
+          },
+        },
+      },
     },
   })
 
@@ -190,6 +206,135 @@ describe("gitbutler adapter", function()
     assert.is_true(unassigned.gitbutler.unpublished)
     assert.are.equal("scratch.lua", unassigned.files[1].path)
     assert.are.equal("A", unassigned.files[1].status)
+    assert.are.equal(2, #unassigned.files[1].hunks)
+  end)
+
+  it("builds review files asynchronously", function()
+    local done
+    gitbutler.workspace_review_async(function(review_data, err)
+      done = { review_data = review_data, err = err }
+    end)
+
+    assert.is_nil(done.err)
+    assert.are.equal(4, #done.review_data.files)
+    assert.are.equal(3, #done.review_data.commits)
+    assert.are.equal("feature/gb", done.review_data.commits[1].gitbutler.branch_name)
+    assert.are.equal("unassigned changes", done.review_data.commits[3].message)
+  end)
+
+  it("rebuilds scopes when a GitButler branch disappears mid-review", function()
+    local deleted_branch_status = vim.fn.json_encode({
+      unassignedChanges = {},
+      stacks = {
+        {
+          cliId = "s1",
+          branches = {
+            {
+              cliId = "br2",
+              name = "feature/other",
+              branchStatus = "fullyPushed",
+              reviewId = 44,
+              commits = {
+                {
+                  commitId = "abcdef1234567890",
+                  message = "feat: other",
+                  authorName = "pesap",
+                },
+              },
+            },
+          },
+        },
+      },
+      mergeBase = { commitId = "abcdef1234567890" },
+    })
+
+    gitbutler._set_runner(function(cmd)
+      local joined = table.concat(cmd, " ")
+      if joined == "but -j status" then
+        return deleted_branch_status, 0
+      end
+      if joined == "but -j diff br2" then
+        return branch_diff_json, 0
+      end
+      if joined == "but -j diff" then
+        return vim.fn.json_encode({ changes = {} }), 0
+      end
+      return "unexpected command: " .. joined, 1
+    end)
+
+    local review_data = assert(gitbutler.workspace_review())
+
+    assert.are.equal(1, #review_data.commits)
+    assert.are.equal("feature/other", review_data.commits[1].gitbutler.branch_name)
+    assert.are.equal(44, review_data.commits[1].gitbutler.review_id)
+    assert.are.equal("lua/review.lua", review_data.files[1].path)
+  end)
+
+  it("reassigns stack-level changes when GitButler branch order changes", function()
+    local reordered_status = vim.fn.json_encode({
+      unassignedChanges = {},
+      stacks = {
+        {
+          cliId = "s1",
+          assignedChanges = {
+            { cliId = "st", filePath = "lua/staged.lua", changeType = "modified" },
+          },
+          branches = {
+            {
+              cliId = "br2",
+              name = "feature/other",
+              branchStatus = "fullyPushed",
+              reviewId = 45,
+              commits = {
+                {
+                  commitId = "abcdef1234567890",
+                  message = "feat: other",
+                  authorName = "pesap",
+                },
+              },
+            },
+            {
+              cliId = "br",
+              name = "feature/gb",
+              branchStatus = "fullyPushed",
+              reviewId = 46,
+              commits = {
+                {
+                  commitId = "1234567890abcdef",
+                  message = "feat: gb",
+                  authorName = "pesap",
+                },
+              },
+            },
+          },
+        },
+      },
+      mergeBase = { commitId = "abcdef1234567890" },
+    })
+
+    gitbutler._set_runner(function(cmd)
+      local joined = table.concat(cmd, " ")
+      if joined == "but -j status" then
+        return reordered_status, 0
+      end
+      if joined == "but -j diff br" or joined == "but -j diff br2" then
+        return branch_diff_json, 0
+      end
+      if joined == "but -j diff s1" then
+        return stack_diff_json, 0
+      end
+      if joined == "but -j diff" then
+        return vim.fn.json_encode({ changes = {} }), 0
+      end
+      return "unexpected command: " .. joined, 1
+    end)
+
+    local review_data = assert(gitbutler.workspace_review())
+
+    assert.are.equal("feature/other", review_data.commits[1].gitbutler.branch_name)
+    assert.are.equal("feature/gb", review_data.commits[2].gitbutler.branch_name)
+    assert.are.equal("lua/staged.lua", review_data.commits[2].files[2].path)
+    assert.is_true(review_data.commits[2].files[2].gitbutler.assigned)
   end)
 
   it("resolves GitButler review targets from review IDs and branch PR lookup", function()
