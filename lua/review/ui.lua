@@ -2720,7 +2720,11 @@ function M.refresh_session()
   end
   if s.mode == "local" then
     if review.refresh_local_session() then
-      M.refresh()
+      if state.get_forge_info() then
+        review.refresh_comments()
+      else
+        M.refresh()
+      end
     else
       vim.notify("Could not refresh local review", vim.log.levels.WARN)
     end

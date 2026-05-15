@@ -1133,6 +1133,46 @@ describe("review.ui help", function()
     end
   end)
 
+  it("refreshes remote comments after a local refresh when forge context exists", function()
+    local review = require("review")
+    local state = require("review.state")
+    local original_refresh_local_session = review.refresh_local_session
+    local original_refresh_comments = review.refresh_comments
+    local original_refresh = ui.refresh
+
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.set_forge_info({ forge = "github", pr_number = 19 })
+
+    local local_calls = 0
+    local comment_calls = 0
+    local ui_refresh_calls = 0
+    review.refresh_local_session = function()
+      local_calls = local_calls + 1
+      return true
+    end
+    review.refresh_comments = function()
+      comment_calls = comment_calls + 1
+    end
+    ui.refresh = function()
+      ui_refresh_calls = ui_refresh_calls + 1
+    end
+
+    local ok, err = pcall(function()
+      ui.refresh_session()
+
+      assert.are.equal(1, local_calls)
+      assert.are.equal(1, comment_calls)
+      assert.are.equal(0, ui_refresh_calls)
+    end)
+
+    review.refresh_local_session = original_refresh_local_session
+    review.refresh_comments = original_refresh_comments
+    ui.refresh = original_refresh
+    assert.is_true(ok, err)
+  end)
+
   it("wraps long help entries on narrow terminals", function()
     local original_columns = vim.o.columns
     vim.o.columns = 58
@@ -1446,21 +1486,24 @@ describe("review.ui notes list", function()
     end
     ui.refresh = function() end
 
-    ui.open_notes_list()
-    send_keys("P")
+    local ok, err = pcall(function()
+      ui.open_notes_list()
+      send_keys("P")
 
-    assert.are.equal(2, #posted)
-    assert.are.equal(11, posted[1].pr)
-    assert.are.equal(12, posted[2].pr)
-    local remaining = state.get_notes()
-    assert.are.equal(1, #remaining)
-    assert.are.equal("note unassigned", remaining[1].body)
-    assert.are.equal("staged", remaining[1].status)
+      assert.are.equal(2, #posted)
+      assert.are.equal(11, posted[1].pr)
+      assert.are.equal(12, posted[2].pr)
+      local remaining = state.get_notes()
+      assert.are.equal(1, #remaining)
+      assert.are.equal("note unassigned", remaining[1].body)
+      assert.are.equal("staged", remaining[1].status)
+    end)
 
     gitbutler.resolve_review_target = original_resolve_target
     forge.resolve_context = original_resolve_context
     forge.post_comment = original_post_comment
     ui.refresh = original_refresh
+    assert.is_true(ok, err)
   end)
 
   it("keeps the notes list open while refreshing remote comments", function()

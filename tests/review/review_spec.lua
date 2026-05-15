@@ -386,11 +386,13 @@ describe("review open session metadata", function()
     end
     ui.open = function() end
 
-    review.open({})
+    local ok, err = pcall(function()
+      review.open({})
 
-    assert.are.equal("gitbutler", state.get().vcs)
-    assert.are.equal("base123", state.get().base_ref)
-    assert.are.equal("gitbutler-unassigned", state.get().commits[1].sha)
+      assert.are.equal("gitbutler", state.get().vcs)
+      assert.are.equal("base123", state.get().base_ref)
+      assert.are.equal("gitbutler-unassigned", state.get().commits[1].sha)
+    end)
 
     ui.open = original_ui_open
     git_module.root = original_git_root
@@ -398,6 +400,7 @@ describe("review open session metadata", function()
     git_module.parse_remote = original_parse_remote
     gitbutler.is_workspace = original_gitbutler_is_workspace
     gitbutler.workspace_review = original_workspace_review
+    assert.is_true(ok, err)
   end)
 
   it("refreshes a local session in place without changing the requested ref semantics", function()
