@@ -87,6 +87,18 @@ end, {
   desc = "Compare current review against the marked before-fix baseline",
 })
 
+vim.api.nvim_create_user_command("ReviewCompare", function()
+  require("review").compare()
+end, {
+  desc = "Open the comparison explorer",
+})
+
+vim.api.nvim_create_user_command("ReviewBack", function()
+  require("review").back()
+end, {
+  desc = "Return to the review that was open before compare",
+})
+
 vim.api.nvim_create_user_command("ReviewCompareUnit", function(opts)
   require("review").compare_unit(opts.fargs[1])
 end, {

@@ -211,6 +211,13 @@ describe("git repository context", function()
     assert.are.equal(expected, git.current_head())
   end)
 
+  it("falls back to local main as the default branch when no origin exists", function()
+    git_ok({ "git", "branch", "-m", "main" })
+    git.invalidate_cache()
+
+    assert.are.equal("main", git.default_branch())
+  end)
+
   it("resolves merge-base synchronously and asynchronously", function()
     local expected = vim.trim(git_ok({ "git", "merge-base", "HEAD", "HEAD" }))
     assert.are.equal(expected, git.merge_base("HEAD", "HEAD"))

@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>review.nvim Key Interaction Map</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #65717e;
+      --line: #d7dee7;
+      --rail: #f0f4f8;
+      --diff: #eaf4ff;
+      --modal: #fff6dd;
+      --action: #e8f7ef;
+      --danger: #ffecec;
+      --accent: #1f6feb;
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1480px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 0 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      white-space: nowrap;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.35fr) minmax(260px, 0.9fr);
+      gap: 16px;
+      margin-top: 18px;
+      align-items: start;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .zone {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .cards {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+    }
+
+    .key {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .key.rail { background: var(--rail); }
+    .key.diff { background: var(--diff); }
+    .key.modal { background: var(--modal); }
+    .key.action { background: var(--action); }
+    .key.danger { background: var(--danger); }
+
+    kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      max-width: 82px;
+      min-height: 28px;
+      padding: 3px 7px;
+      border: 1px solid #aab6c3;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: #fff;
+      color: #0f1720;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .flow {
+      min-width: 0;
+    }
+
+    .flow strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .flow span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .map {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 12px;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 12px;
+      min-height: 128px;
+    }
+
+    .node h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .node p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .node ul {
+      margin: 8px 0 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .arrow {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .mini {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px;
+    }
+
+    .mini h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .mini .key {
+      grid-template-columns: 66px 1fr;
+      padding: 7px;
+      margin-top: 6px;
+    }
+
+    @media (max-width: 1100px) {
+      .layout,
+      .map,
+      .matrix {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100vw - 20px, 1480px);
+        padding-top: 14px;
+      }
+
+      header,
+      .layout,
+      .map,
+      .matrix {
+        grid-template-columns: 1fr;
+      }
+
+      header {
+        display: block;
+      }
+
+      .legend {
+        justify-content: flex-start;
+        margin-top: 12px;
+      }
+
+      .key {
+        grid-template-columns: 74px 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>review.nvim Key Interaction Map</h1>
+        <p class="subtitle">Current default key flows from the review layout. User Vim selections stay available: <kbd>b</kbd> and <kbd>V</kbd> are not review.nvim defaults.</p>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span class="chip">Rail: Files / Threads</span>
+        <span class="chip">Diff: unified / split</span>
+        <span class="chip">Modal: popups / lists</span>
+      </div>
+    </header>
+
+    <div class="map" aria-label="Primary navigation flow">
+      <div class="node">
+        <h3>Files Rail</h3>
+        <p>Pick files, scope rows, folders, and filters.</p>
+        <ul>
+          <li><kbd>&lt;CR&gt;</kbd> opens selected file or row</li>
+          <li><kbd>s</kbd> returns to last diff/split cursor</li>
+          <li><kbd>t</kbd> focuses Threads</li>
+        </ul>
+      </div>
+      <div class="node">
+        <h3>Diff / Split</h3>
+        <p>Review code, add notes, navigate hunks, and toggle split.</p>
+        <ul>
+          <li><kbd>s</kbd> toggles unified/split here only</li>
+          <li><kbd>f</kbd> focuses Files</li>
+          <li><kbd>t</kbd> focuses Threads</li>
+        </ul>
+      </div>
+      <div class="node">
+        <h3>Threads Rail</h3>
+        <p>Browse local notes, remote threads, timeline, and stale items.</p>
+        <ul>
+          <li><kbd>&lt;Tab&gt;</kbd> cycles actionable rows</li>
+          <li><kbd>s</kbd> returns to last diff/split cursor</li>
+          <li><kbd>&lt;CR&gt;</kbd> opens thread or note</li>
+        </ul>
+      </div>
+      <div class="node">
+        <h3>Notes / Blame / History</h3>
+        <p>Floating workflows for queue management and context collection.</p>
+        <ul>
+          <li><kbd>N</kbd> opens notes list</li>
+          <li><kbd>B</kbd> opens blame from diff</li>
+          <li><kbd>L</kbd> opens file history</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="layout">
+      <section>
+        <div class="section-head">
+          <h2>Files Rail</h2>
+          <span class="zone">file navigator</span>
+        </div>
+        <div class="cards">
+          <div class="key rail"><kbd>&lt;CR&gt;</kbd><div class="flow"><strong>Open selected row</strong><span>File row -> select file and focus diff. Directory -> expand/collapse. Scope row -> select all/current commit. Thread row -> jump or open thread.</span></div></div>
+          <div class="key rail"><kbd>s</kbd><div class="flow"><strong>Return to diff</strong><span>Focuses the last diff or split window and preserves its cursor position.</span></div></div>
+          <div class="key rail"><kbd>&lt;BS&gt;</kbd><div class="flow"><strong>Focus Diff</strong><span>Moves to the remembered diff/split window.</span></div></div>
+          <div class="key rail"><kbd>t</kbd><div class="flow"><strong>Focus Threads</strong><span>Moves to the Threads rail without changing the selected file.</span></div></div>
+          <div class="key rail"><kbd>f</kbd><div class="flow"><strong>Focus Files</strong><span>Keeps focus in the Files section and restores a useful file row.</span></div></div>
+          <div class="key rail"><kbd>&lt;Tab&gt;</kbd><div class="flow"><strong>Cycle scope</strong><span>Cycles all/current commit/select commit scope. GitButler cycles branch and unassigned units.</span></div></div>
+          <div class="key rail"><kbd>K</kbd><div class="flow"><strong>Commit details</strong><span>On a scope row, opens that commit/review unit detail popup.</span></div></div>
+          <div class="key rail"><kbd>C</kbd><div class="flow"><strong>Compare units</strong><span>Compares selected/current review unit against another unit.</span></div></div>
+          <div class="key rail"><kbd>u</kbd><div class="flow"><strong>Copy unit handoff</strong><span>Copies a handoff packet for the selected review unit row.</span></div></div>
+          <div class="key rail"><kbd>o</kbd><div class="flow"><strong>Cycle file sort</strong><span>Path -> risk -> overlap -> notes -> size -> unreviewed.</span></div></div>
+          <div class="key rail"><kbd>H</kbd><div class="flow"><strong>Hide reviewed</strong><span>Toggles reviewed files in the navigator.</span></div></div>
+          <div class="key rail"><kbd>A</kbd><div class="flow"><strong>Attention filter</strong><span>Cycles attention flags, including changed-since-baseline.</span></div></div>
+          <div class="key rail"><kbd>/</kbd><div class="flow"><strong>Search navigator</strong><span>Filters files, notes, and commit messages.</span></div></div>
+          <div class="key rail"><kbd>c</kbd><div class="flow"><strong>Clear search</strong><span>Clears file search and attention filter state.</span></div></div>
+          <div class="key rail"><kbd>r</kbd><div class="flow"><strong>Cycle review status</strong><span>Changes file status: unreviewed, reviewed, needs-agent, blocked, resolved.</span></div></div>
+          <div class="key rail"><kbd>za</kbd><div class="flow"><strong>Expand/collapse</strong><span>Toggles inline note rows under files or directory rows.</span></div></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Diff And Split</h2>
+          <span class="zone">code review surface</span>
+        </div>
+        <div class="cards">
+          <div class="key diff"><kbd>a</kbd><div class="flow"><strong>Add note</strong><span>Normal mode adds a line note. Visual mode adds a range note using selected code lines.</span></div></div>
+          <div class="key diff"><kbd>S</kbd><div class="flow"><strong>Add suggestion</strong><span>Creates a GitHub-compatible suggestion block from current line or visual selection.</span></div></div>
+          <div class="key diff"><kbd>e</kbd><div class="flow"><strong>Edit note</strong><span>Opens editor for the note under the cursor.</span></div></div>
+          <div class="key danger"><kbd>d</kbd><div class="flow"><strong>Delete note</strong><span>Deletes the local note under the cursor after the normal confirmation path.</span></div></div>
+          <div class="key diff"><kbd>s</kbd><div class="flow"><strong>Toggle split</strong><span>In diff buffers, switches between unified and side-by-side split view.</span></div></div>
+          <div class="key diff"><kbd>&lt;C-v&gt;</kbd><div class="flow"><strong>Visual block</strong><span>Starts block selection at the code column, past line numbers and diff +/- markers.</span></div></div>
+          <div class="key diff"><kbd>V</kbd><div class="flow"><strong>Visual line</strong><span>Native Vim selection. review.nvim does not bind this by default.</span></div></div>
+          <div class="key diff"><kbd>y</kbd><div class="flow"><strong>Yank code</strong><span>In visual mode, yanks selected code without diff gutters, line numbers, or +/- signs.</span></div></div>
+          <div class="key diff"><kbd>]c</kbd><div class="flow"><strong>Next hunk</strong><span>Moves to the next diff hunk and clamps cursor to the code column.</span></div></div>
+          <div class="key diff"><kbd>[c</kbd><div class="flow"><strong>Previous hunk</strong><span>Moves to the previous diff hunk and clamps cursor to the code column.</span></div></div>
+          <div class="key diff"><kbd>]f</kbd><div class="flow"><strong>Next file</strong><span>Selects the next file in the active file list.</span></div></div>
+          <div class="key diff"><kbd>[f</kbd><div class="flow"><strong>Previous file</strong><span>Selects the previous file in the active file list.</span></div></div>
+          <div class="key diff"><kbd>]n</kbd><div class="flow"><strong>Next note</strong><span>Jumps to the next note across files.</span></div></div>
+          <div class="key diff"><kbd>[n</kbd><div class="flow"><strong>Previous note</strong><span>Jumps to the previous note across files.</span></div></div>
+          <div class="key diff"><kbd>B</kbd><div class="flow"><strong>Toggle blame</strong><span>Opens or closes the blame side panel from the current diff file.</span></div></div>
+          <div class="key diff"><kbd>L</kbd><div class="flow"><strong>File history</strong><span>Opens file history and commit diff popup for the current file.</span></div></div>
+          <div class="key diff"><kbd>f</kbd><div class="flow"><strong>Focus Files</strong><span>Leaves diff and remembers the active diff/split window for return.</span></div></div>
+          <div class="key diff"><kbd>t</kbd><div class="flow"><strong>Focus Threads</strong><span>Leaves diff and remembers the active diff/split window for return.</span></div></div>
+          <div class="key diff"><kbd>N</kbd><div class="flow"><strong>Notes list</strong><span>Opens the note management popup.</span></div></div>
+          <div class="key diff"><kbd>q</kbd><div class="flow"><strong>Close layout</strong><span>Closes the full review tab/layout.</span></div></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Threads Rail</h2>
+          <span class="zone">thread queue</span>
+        </div>
+        <div class="cards">
+          <div class="key rail"><kbd>&lt;CR&gt;</kbd><div class="flow"><strong>Open thread or note</strong><span>Remote thread -> thread view. Local note -> jump to diff location. Stale item -> notes list or thread view.</span></div></div>
+          <div class="key rail"><kbd>s</kbd><div class="flow"><strong>Return to diff</strong><span>Focuses the last diff or split window and preserves its cursor position.</span></div></div>
+          <div class="key rail"><kbd>&lt;Tab&gt;</kbd><div class="flow"><strong>Next actionable row</strong><span>Cycles through thread file rows, thread notes, and stale rows.</span></div></div>
+          <div class="key rail"><kbd>&lt;S-Tab&gt;</kbd><div class="flow"><strong>Previous actionable row</strong><span>Cycles backward through actionable thread rows.</span></div></div>
+          <div class="key rail"><kbd>f</kbd><div class="flow"><strong>Focus Files</strong><span>Returns to the Files rail.</span></div></div>
+          <div class="key rail"><kbd>&lt;BS&gt;</kbd><div class="flow"><strong>Focus Diff</strong><span>Returns to remembered diff/split position.</span></div></div>
+          <div class="key rail"><kbd>N</kbd><div class="flow"><strong>Notes list</strong><span>Opens all notes in a floating management list.</span></div></div>
+          <div class="key rail"><kbd>?</kbd><div class="flow"><strong>Help</strong><span>Opens the review help popup.</span></div></div>
+          <div class="key rail"><kbd>q</kbd><div class="flow"><strong>Close layout</strong><span>Closes the review layout.</span></div></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="matrix" aria-label="Modal interaction groups">
+      <div class="mini">
+        <h3>Blame Panel</h3>
+        <div class="key modal"><kbd>a</kbd><div class="flow"><strong>Attach row</strong><span>Queue selected blame row for the next note.</span></div></div>
+        <div class="key modal"><kbd>t</kbd><div class="flow"><strong>Toggle ref</strong><span>Switch base/head blame mode.</span></div></div>
+        <div class="key modal"><kbd>B</kbd><div class="flow"><strong>Close</strong><span>Close blame panel.</span></div></div>
+        <div class="key modal"><kbd>q</kbd><div class="flow"><strong>Close</strong><span>Close blame panel.</span></div></div>
+      </div>
+
+      <div class="mini">
+        <h3>Notes List</h3>
+        <div class="key modal"><kbd>&lt;CR&gt;</kbd><div class="flow"><strong>Open location</strong><span>Jump to note or thread.</span></div></div>
+        <div class="key modal"><kbd>s</kbd><div class="flow"><strong>Stage toggle</strong><span>Draft <span class="arrow">&lt;-&gt;</span> staged.</span></div></div>
+        <div class="key modal"><kbd>P</kbd><div class="flow"><strong>Publish</strong><span>Publish staged notes.</span></div></div>
+        <div class="key modal"><kbd>d</kbd><div class="flow"><strong>Delete</strong><span>Delete local note.</span></div></div>
+      </div>
+
+      <div class="mini">
+        <h3>Notes List Copy</h3>
+        <div class="key modal"><kbd>y</kbd><div class="flow"><strong>Copy queue</strong><span>Local notes, open threads, discussion.</span></div></div>
+        <div class="key modal"><kbd>u</kbd><div class="flow"><strong>Copy unit</strong><span>Handoff for selected note's unit.</span></div></div>
+        <div class="key modal"><kbd>Y</kbd><div class="flow"><strong>Copy local</strong><span>Only local draft/staged notes.</span></div></div>
+        <div class="key modal"><kbd>C</kbd><div class="flow"><strong>Clear local</strong><span>Clear all local notes after confirmation.</span></div></div>
+      </div>
+
+      <div class="mini">
+        <h3>Notes List Filter</h3>
+        <div class="key modal"><kbd>/</kbd><div class="flow"><strong>Search</strong><span>Filter notes by text.</span></div></div>
+        <div class="key modal"><kbd>f</kbd><div class="flow"><strong>Status filter</strong><span>Cycle draft/staged/resolved/published filters.</span></div></div>
+        <div class="key modal"><kbd>c</kbd><div class="flow"><strong>Clear filters</strong><span>Reset notes filters.</span></div></div>
+        <div class="key modal"><kbd>gd</kbd><div class="flow"><strong>Reference jump</strong><span>Jump to note referenced as #id.</span></div></div>
+      </div>
+
+      <div class="mini">
+        <h3>Global Review</h3>
+        <div class="key action"><kbd>R</kbd><div class="flow"><strong>Refresh</strong><span>Reload local or remote review data.</span></div></div>
+        <div class="key action"><kbd>&lt;leader&gt;B</kbd><div class="flow"><strong>Change base</strong><span>Re-diff active local review against another base.</span></div></div>
+        <div class="key action"><kbd>M</kbd><div class="flow"><strong>Mark baseline</strong><span>Save current HEAD and file state.</span></div></div>
+        <div class="key action"><kbd>&lt;leader&gt;V</kbd><div class="flow"><strong>Compare baseline</strong><span>Compare current work against saved baseline.</span></div></div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

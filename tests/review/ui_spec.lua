@@ -153,10 +153,12 @@ describe("review.ui explorer rail", function()
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
 
-    assert.are.equal(" feature/rail-polish", lines[1])
-    assert.are.equal(" against main", lines[2])
-    assert.are.equal(" Scope  all", lines[3])
-    assert.is_true(lines[4]:find("scope", 1, true) ~= nil)
+    assert.is_true(lines[1]:find("[F] Files", 1, true) ~= nil)
+    local explorer_text = table.concat(lines, "\n")
+    assert.is_nil(explorer_text:find("feature/rail-polish", 1, true))
+    assert.is_nil(explorer_text:find("against main", 1, true))
+    assert.is_nil(explorer_text:find("Scope", 1, true))
+    assert.is_nil(explorer_text:find("<Tab> scope", 1, true))
     local files_header
     for _, line in ipairs(lines) do
       if line:find("[F]", 1, true) then
@@ -166,7 +168,7 @@ describe("review.ui explorer rail", function()
     end
     assert.is_not_nil(files_header)
     assert.is_true(files_header:find("+", 1, true) ~= nil and files_header:find("-", 1, true) ~= nil)
-    assert.is_nil(table.concat(lines, "\n"):find("▶", 1, true))
+    assert.is_nil(explorer_text:find("▶", 1, true))
     assert.are.equal("no", vim.wo[state.get_ui().explorer_win].signcolumn)
     local has_lua_dir = false
     for _, line in ipairs(lines) do
@@ -212,6 +214,33 @@ describe("review.ui explorer rail", function()
     assert.is_false(vim.tbl_contains(explorer_lines, " Staged"))
     assert.is_false(vim.tbl_contains(explorer_lines, " Unstaged"))
     assert.is_true(diff_pos[2] > vim.api.nvim_win_get_position(ui_state.explorer_win)[2])
+  end)
+
+  it("closes the whole review tab when one pane is quit", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local review_tab = ui_state.tab
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    vim.cmd("quit")
+
+    vim.wait(200, function()
+      return state.get() == nil
+    end)
+
+    assert.is_nil(state.get())
+    local still_open = false
+    for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+      if tab == review_tab then
+        still_open = true
+        break
+      end
+    end
+    assert.is_false(still_open)
   end)
 
   it("does not embed a GitButler mutation pane for GitButler sessions", function()
@@ -287,20 +316,6 @@ describe("review.ui explorer rail", function()
 
     state.set_commits({
       {
-        sha = "branch-scope",
-        short_sha = "branch",
-        message = "feature/gb",
-        files = {
-          {
-            path = "lua/review.lua",
-            status = "M",
-            hunks = { sample_hunk(2, 2) },
-            gitbutler = { kind = "branch", branch_name = "feature/gb" },
-          },
-        },
-        gitbutler = { kind = "branch", branch_name = "feature/gb" },
-      },
-      {
         sha = "gitbutler-unassigned",
         short_sha = "unassgn",
         message = "unassigned changes",
@@ -314,20 +329,43 @@ describe("review.ui explorer rail", function()
         },
         gitbutler = { kind = "unassigned" },
       },
+      {
+        sha = "branch-scope",
+        short_sha = "branch",
+        message = "feature/gb",
+        files = {
+          {
+            path = "lua/review.lua",
+            status = "M",
+            hunks = { sample_hunk(2, 2) },
+            gitbutler = { kind = "branch", branch_name = "feature/gb" },
+          },
+        },
+        gitbutler = { kind = "branch", branch_name = "feature/gb" },
+      },
     })
 
     ui.toggle_stack_view()
     assert.are.equal(1, state.get().current_commit_idx)
     assert.are.equal("current_commit", state.scope_mode())
+    assert.are.equal("unassigned", state.current_commit().gitbutler.kind)
 
     ui.toggle_stack_view()
     assert.are.equal(2, state.get().current_commit_idx)
     assert.are.equal("current_commit", state.scope_mode())
+    assert.are.equal("feature/gb", state.current_commit().gitbutler.branch_name)
 
     ui.toggle_stack_view()
     assert.is_nil(state.get().current_commit_idx)
     assert.are.equal("all", state.scope_mode())
+    assert.is_nil(state.current_commit())
 
+    ui.toggle_stack_view()
+    assert.are.equal(1, state.get().current_commit_idx)
+    assert.are.equal("current_commit", state.scope_mode())
+    assert.are.equal("unassigned", state.current_commit().gitbutler.kind)
+
+    state.set_scope_mode("all")
     ui.open()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().files_buf, 0, -1, false)
@@ -480,10 +518,6 @@ describe("review.ui explorer rail", function()
     assert.is_function(pending)
     assert.is_true(state.get().commits[1].loading)
 
-    local lines = table.concat(vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false), "\n")
-    assert.is_true(lines:find("async1", 1, true) ~= nil)
-    assert.is_true(lines:find("commit loading", 1, true) ~= nil)
-
     pending(table.concat({
       "diff --git a/lua/async.lua b/lua/async.lua",
       "--- a/lua/async.lua",
@@ -621,6 +655,7 @@ describe("review.ui explorer rail", function()
   it("toggles tree and flat file layouts and cycles review status", function()
     review.setup({
       keymaps = {
+        focus_threads = "T",
         toggle_file_tree = "t",
       },
     })
@@ -634,13 +669,13 @@ describe("review.ui explorer rail", function()
     local ui_state = state.get_ui()
     local lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
     assert.is_false(table.concat(lines, "\n"):find(" - ./", 1, true) ~= nil)
-    assert.is_true(table.concat(lines, "\n"):match("%- lua/%s+0/1 reviewed") ~= nil)
+    assert.is_true(table.concat(lines, "\n"):match("%- lu.*0/1 reviewed") ~= nil)
     assert.is_true(table.concat(lines, "\n"):match("+%s+REA.*md") ~= nil)
     assert.is_true(table.concat(lines, "\n"):find(" L ", 1, true) == nil)
 
     local lua_dir_line
     for idx, line in ipairs(lines) do
-      if line:match("%- lua/%s+0/1 reviewed") then
+      if line:match("%- lu.*0/1 reviewed") then
         lua_dir_line = idx
         break
       end
@@ -650,16 +685,16 @@ describe("review.ui explorer rail", function()
     vim.api.nvim_win_set_cursor(ui_state.explorer_win, { lua_dir_line, 0 })
     send_keys("za")
     lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
-    assert.is_true(table.concat(lines, "\n"):match("%+ lua/%s+0/1 reviewed") ~= nil)
+    assert.is_true(table.concat(lines, "\n"):match("%+ lu.*0/1 reviewed") ~= nil)
     assert.is_false(table.concat(lines, "\n"):find("review.lua", 1, true) ~= nil)
     send_keys("za")
     lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
-    assert.is_true(table.concat(lines, "\n"):match("%- lua/%s+0/1 reviewed") ~= nil)
+    assert.is_true(table.concat(lines, "\n"):match("%- lu.*0/1 reviewed") ~= nil)
 
     vim.api.nvim_set_current_win(ui_state.explorer_win)
     send_keys("t")
     lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
-    assert.is_false(table.concat(lines, "\n"):match("%- lua/%s+0/1 reviewed") ~= nil)
+    assert.is_false(table.concat(lines, "\n"):match("%- lu.*0/1 reviewed") ~= nil)
     assert.is_true(table.concat(lines, "\n"):match("revi.*lua") ~= nil)
     assert.are.equal("flat", state.get_ui_prefs().file_tree_mode)
 
@@ -667,7 +702,31 @@ describe("review.ui explorer rail", function()
     assert.are.equal("reviewed", state.get_file_review_status("lua/review.lua"))
   end)
 
-  it("keeps the cursor on the file row whose review status changed", function()
+  it("aligns root file and directory markers in tree mode", function()
+    state.create("local", "main", {
+      { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "docs/guide.md", status = "D", hunks = { sample_hunk(4, 4) } },
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local file_marker_col
+    local dir_marker_col
+    for _, line in ipairs(lines) do
+      if line:find("READ", 1, true) then
+        file_marker_col = line:find("~", 1, true)
+      elseif line:find("reviewed", 1, true) then
+        dir_marker_col = line:find("-", 1, true)
+      end
+    end
+
+    assert.is_not_nil(file_marker_col)
+    assert.is_not_nil(dir_marker_col)
+    assert.are.equal(file_marker_col, dir_marker_col)
+  end)
+
+  it("keeps the cursor on the file row and column when toggling review status", function()
     state.create("local", "main", {
       { path = "a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
       { path = "b.lua", status = "M", hunks = { sample_hunk(4, 4) } },
@@ -687,13 +746,49 @@ describe("review.ui explorer rail", function()
     assert.is_not_nil(target_line)
 
     vim.api.nvim_set_current_win(ui_state.explorer_win)
-    vim.api.nvim_win_set_cursor(ui_state.explorer_win, { target_line, 0 })
+    vim.api.nvim_win_set_cursor(ui_state.explorer_win, { target_line, 3 })
     send_keys("r")
 
     assert.are.equal("reviewed", state.get_file_review_status("b.lua"))
     local cursor_line = vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1]
+    local cursor_col = vim.api.nvim_win_get_cursor(ui_state.explorer_win)[2]
     local cursor_text = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, cursor_line - 1, cursor_line, false)[1]
     assert.is_true(cursor_text:find("b.lua", 1, true) ~= nil)
+    assert.are.equal(3, cursor_col)
+
+    send_keys("r")
+    assert.are.equal("unreviewed", state.get_file_review_status("b.lua"))
+    assert.are.equal(cursor_line, vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1])
+    assert.are.equal(3, vim.api.nvim_win_get_cursor(ui_state.explorer_win)[2])
+  end)
+
+  it("keeps the cursor on a directory row after collapsing it", function()
+    state.create("local", "main", {
+      { path = "nested/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "nested/b.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+    })
+    state.update_ui_prefs({ file_tree_mode = "tree" })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
+    local dir_line
+    for idx, line in ipairs(lines) do
+      if line:find("0/2 reviewed", 1, true) and line:find("-", 1, true) then
+        dir_line = idx
+        break
+      end
+    end
+    assert.is_not_nil(dir_line)
+
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    vim.api.nvim_win_set_cursor(ui_state.explorer_win, { dir_line, 0 })
+    send_keys("za")
+
+    local cursor_line = vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1]
+    local cursor_text = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, cursor_line - 1, cursor_line, false)[1]
+    assert.is_true(cursor_text:find("0/2 reviewed", 1, true) ~= nil and cursor_text:find("+", 1, true) ~= nil)
   end)
 
   it("keeps T focused on threads when tree toggle is configured to T", function()
@@ -754,6 +849,140 @@ describe("review.ui explorer rail", function()
     assert.is_false(has_buffer_d_map)
   end)
 
+  it("uses B for blame and leaves b available for normal navigation", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local diff_buf = state.get_ui().diff_buf
+    local has_upper_blame = false
+    local has_lower_blame = false
+    for _, map in ipairs(vim.api.nvim_buf_get_keymap(diff_buf, "n")) do
+      if map.lhs == "B" then
+        has_upper_blame = true
+      elseif map.lhs == "b" then
+        has_lower_blame = true
+      end
+    end
+    assert.is_true(has_upper_blame)
+    assert.is_false(has_lower_blame)
+  end)
+
+  it("leaves V available for visual-line selections", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+
+    local diff_buf = state.get_ui().diff_buf
+    for _, map in ipairs(vim.api.nvim_buf_get_keymap(diff_buf, "n")) do
+      assert.is_false(map.lhs == "V")
+    end
+  end)
+
+  it("uses t for threads and leaves tree view as the default without a tree toggle key", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.add_note("lua/review.lua", 2, "local draft", nil, "new")
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    send_keys("t")
+
+    assert.are.equal(ui_state.threads_win, vim.api.nvim_get_current_win())
+    assert.are.equal("tree", state.get_ui().file_tree_mode)
+  end)
+
+  it("uses tab to cycle note rows inside the threads pane", function()
+    state.create("local", "HEAD", {
+      { path = "lua/one.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/two.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+    })
+    state.add_note("lua/one.lua", 2, "first", nil, "new")
+    state.add_note("lua/two.lua", 4, "second", nil, "new")
+
+    ui.open()
+    ui.focus_section("threads")
+
+    local ui_state = state.get_ui()
+    local first_line = vim.api.nvim_win_get_cursor(ui_state.threads_win)[1]
+    send_keys("<Tab>")
+    local second_line = vim.api.nvim_win_get_cursor(ui_state.threads_win)[1]
+
+    assert.is_true(second_line > first_line)
+    send_keys("<S-Tab>")
+    assert.are.equal(first_line, vim.api.nvim_win_get_cursor(ui_state.threads_win)[1])
+  end)
+
+  it("keeps tab scope cycling on the same file when scope headers appear", function()
+    state.create("local", "main", {
+      { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "lua/b.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+    })
+    state.set_commits({
+      {
+        sha = "abc123456789",
+        short_sha = "abc1234",
+        message = "unit",
+        files = {
+          { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+          { path = "lua/b.lua", status = "M", hunks = { sample_hunk(4, 4) } },
+        },
+      },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    local lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
+    local b_line
+    for idx, line in ipairs(lines) do
+      if line:find("b.lua", 1, true) then
+        b_line = idx
+        break
+      end
+    end
+    assert.is_not_nil(b_line)
+
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    vim.api.nvim_win_set_cursor(ui_state.explorer_win, { b_line, 0 })
+    send_keys("<Tab>")
+
+    assert.are.equal(ui_state.explorer_win, vim.api.nvim_get_current_win())
+    local cursor_line = vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1]
+    local cursor_text = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, cursor_line - 1, cursor_line, false)[1]
+    assert.is_true(cursor_text:find("b.lua", 1, true) ~= nil)
+    assert.are.equal("lua/b.lua", state.active_files()[state.get().current_file_idx].path)
+  end)
+
+  it("keeps tab scope cycling in the diff pane", function()
+    state.create("local", "main", {
+      { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.set_commits({
+      {
+        sha = "abc123456789",
+        short_sha = "abc1234",
+        message = "unit",
+        files = { { path = "lua/a.lua", status = "M", hunks = { sample_hunk(2, 2) } } },
+      },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    send_keys("<Tab>")
+
+    assert.are.equal(ui_state.diff_win, vim.api.nvim_get_current_win())
+  end)
+
   it("returns to the previous file row when focusing files from split diff", function()
     review.setup({
       keymaps = {
@@ -787,6 +1016,114 @@ describe("review.ui explorer rail", function()
 
     assert.are.equal(ui_state.explorer_win, vim.api.nvim_get_current_win())
     assert.are.equal(target_line, vim.api.nvim_win_get_cursor(ui_state.explorer_win)[1])
+  end)
+
+  it("returns to the same split diff pane after focusing files", function()
+    review.setup({
+      keymaps = {
+        focus_files = "F",
+        focus_diff = "<BS>",
+      },
+    })
+    state.create("local", "HEAD", {
+      { path = "a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    send_keys("F")
+    send_keys("<BS>")
+
+    assert.are.equal(ui_state.split_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("uses s from files and threads to return to the last diff split position", function()
+    state.create("local", "HEAD", {
+      { path = "a.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.add_note("a.lua", 2, "thread", nil, "new")
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    vim.api.nvim_win_set_cursor(ui_state.split_win, { 2, 0 })
+
+    ui.focus_section("files")
+    send_keys("s")
+
+    assert.are.equal(ui_state.split_win, vim.api.nvim_get_current_win())
+    assert.are.equal(2, vim.api.nvim_win_get_cursor(ui_state.split_win)[1])
+
+    vim.api.nvim_win_set_cursor(ui_state.split_win, { 1, 0 })
+    ui.focus_section("threads")
+    send_keys("s")
+
+    assert.are.equal(ui_state.split_win, vim.api.nvim_get_current_win())
+    assert.are.equal(1, vim.api.nvim_win_get_cursor(ui_state.split_win)[1])
+  end)
+
+  it("places the split cursor below the first two lines when opening split view", function()
+    state.create("local", "HEAD", {
+      {
+        path = "a.lua",
+        status = "M",
+        hunks = {
+          {
+            header = "@@ -1,3 +1,3 @@",
+            old_start = 1,
+            old_count = 3,
+            new_start = 1,
+            new_count = 3,
+            lines = {
+              { type = "ctx", text = "line one", old_lnum = 1, new_lnum = 1 },
+              { type = "ctx", text = "line two", old_lnum = 2, new_lnum = 2 },
+              { type = "del", text = "before", old_lnum = 3 },
+              { type = "add", text = "after", new_lnum = 3 },
+            },
+          },
+        },
+      },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    local cursor_line = vim.api.nvim_win_get_cursor(ui_state.split_win)[1]
+    assert.are.equal(3, cursor_line)
+  end)
+
+  it("toggles split view repeatedly from the split pane without closing review", function()
+    state.create("local", "HEAD", {
+      {
+        path = "a.lua",
+        status = "M",
+        hunks = { sample_hunk(2, 2) },
+      },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    send_keys("s")
+
+    assert.is_not_nil(state.get())
+    assert.are.equal("unified", ui_state.view_mode)
+    assert.is_nil(ui_state.split_win)
+    assert.is_true(vim.api.nvim_win_is_valid(ui_state.diff_win))
+
+    send_keys("s")
+
+    assert.is_not_nil(state.get())
+    assert.are.equal("split", ui_state.view_mode)
+    assert.is_true(vim.api.nvim_win_is_valid(ui_state.split_win))
   end)
 
   it("cycles review unit status from scope rows and shows unit progress", function()
@@ -831,7 +1168,7 @@ describe("review.ui explorer rail", function()
     assert.is_true(lines[commit_line]:find("v", 1, true) ~= nil)
   end)
 
-  it("keeps review unit rows visible during normal review with compact stats", function()
+  it("keeps review unit rows out of the normal review rail", function()
     local original_columns = vim.o.columns
     vim.o.columns = 170
 
@@ -859,12 +1196,12 @@ describe("review.ui explorer rail", function()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
-    assert.is_true(joined:find("all", 1, true) ~= nil)
-    assert.is_true(joined:find("workspace f2", 1, true) ~= nil)
-    assert.is_false(joined:find("workspace f2 +2 -2", 1, true) ~= nil)
-    assert.is_true(joined:find("abc1234", 1, true) ~= nil)
-    assert.is_true(joined:find("commit f2", 1, true) ~= nil)
-    assert.is_false(joined:find("commit f2 +2 -2", 1, true) ~= nil)
+    assert.is_nil(joined:find("Scope", 1, true))
+    assert.is_nil(joined:find("workspace f2", 1, true))
+    assert.is_nil(joined:find("abc1234", 1, true))
+    assert.is_nil(joined:find("commit f2", 1, true))
+    assert.is_true(lines[1]:find("feature/rail-polish", 1, true) ~= nil)
+    assert.is_true(joined:find("[F] Files", 1, true) ~= nil)
 
     vim.o.columns = original_columns
   end)
@@ -894,20 +1231,41 @@ describe("review.ui explorer rail", function()
         files = { { path = "lua/zzz.lua", status = "M", hunks = { sample_hunk(4, 4) } } },
       },
     })
+    state.set_scope_mode("select_commit")
     state.update_ui_prefs({ file_sort_mode = "notes" })
 
     ui.open()
 
-    local joined = table.concat(vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false), "\n")
-    assert.is_true(joined:find("zzz222", 1, true) < joined:find("aaa111", 1, true))
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local zzz_row
+    local aaa_row
+    for idx, line in ipairs(lines) do
+      if line:match("^%s+zzz222") then
+        zzz_row = idx
+      elseif line:match("^%s+aaa111") then
+        aaa_row = idx
+      end
+    end
+    assert.is_not_nil(zzz_row)
+    assert.is_not_nil(aaa_row)
+    assert.is_true(zzz_row < aaa_row)
 
     state.update_ui_prefs({ file_search_query = "zzz unit" })
     state.get_ui().file_search_query = "zzz unit"
     ui.refresh()
 
-    joined = table.concat(vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false), "\n")
-    assert.is_true(joined:find("zzz222", 1, true) ~= nil)
-    assert.is_nil(joined:find("aaa111", 1, true))
+    lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
+    local found_zzz = false
+    local found_aaa = false
+    for _, line in ipairs(lines) do
+      if line:match("^%s+zzz222") then
+        found_zzz = true
+      elseif line:match("^%s+aaa111") then
+        found_aaa = true
+      end
+    end
+    assert.is_true(found_zzz)
+    assert.is_false(found_aaa)
 
     vim.o.columns = original_columns
   end)
@@ -1136,7 +1494,106 @@ describe("review.ui explorer rail", function()
     assert.is_nil(explorer:find(" old.lua", 1, true))
 
     local threads = table.concat(vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false), "\n")
-    assert.is_true(threads:find("done", 1, true) ~= nil)
+    assert.is_true(threads:find("filter:resolved", 1, true) ~= nil)
+    assert.is_true(threads:find("1 thread", 1, true) ~= nil)
+  end)
+
+  it("shows compare sessions even when previous file filters would hide them", function()
+    state.create("local", "v1.0.0", {
+      { path = "lua/compare.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      left_ref = "v1.0.0",
+      right_ref = "v1.1.0",
+      requested_ref = "v1.0.0..v1.1.0",
+      comparison_key = "git::v1.0.0::v1.1.0",
+    })
+    state.set_file_review_status("lua/compare.lua", "reviewed")
+    state.update_ui_prefs({
+      file_attention_filter = "threads",
+      hide_reviewed_files = true,
+      file_search_query = "will-not-match",
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    assert.are.equal("all", ui_state.file_attention_filter)
+    assert.is_false(ui_state.hide_reviewed_files)
+    assert.are.equal("", ui_state.file_search_query)
+
+    local explorer = table.concat(vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false), "\n")
+    assert.is_true(explorer:find("compare", 1, true) ~= nil)
+    assert.is_nil(explorer:find("(no files)", 1, true))
+  end)
+
+  it("renders compare context as readable base and head rows", function()
+    state.create("local", "main", {
+      { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "docs/git-tour.md", status = "D", hunks = { sample_hunk(4, 4) } },
+    }, {
+      left_ref = "main",
+      right_ref = "bugfix/input-validation",
+      requested_ref = "main..bugfix/input-validation",
+      comparison_key = "git::main::bugfix/input-validation",
+    })
+
+    ui.open()
+
+    local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, 6, false)
+    assert.are.equal(" compare", lines[1])
+    assert.are.equal("   base main", lines[2])
+    assert.are.equal("   head bugfix/", lines[3])
+    assert.are.equal("  input-validation", lines[4])
+    assert.is_false(vim.tbl_contains(lines, " bugfix/input-validation"))
+  end)
+
+  it("shows how to leave a compare session", function()
+    state.create("local", "main", {
+      { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      left_ref = "main",
+      right_ref = "bugfix/input-validation",
+      requested_ref = "main..bugfix/input-validation",
+      comparison_key = "git::main::bugfix/input-validation",
+      previous_review = { kind = "default" },
+    })
+
+    ui.open()
+
+    local explorer = table.concat(vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false), "\n")
+    assert.is_true(explorer:find("back", 1, true) ~= nil)
+    assert.is_true(explorer:find(":ReviewBack", 1, true) ~= nil)
+  end)
+
+  it("makes tab in compare sessions open commit scope instead of changing files silently", function()
+    state.create("local", "main", {
+      { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } },
+      { path = "docs/git-tour.md", status = "D", hunks = { sample_hunk(4, 4) } },
+    }, {
+      left_ref = "main",
+      right_ref = "bugfix/input-validation",
+      requested_ref = "main..bugfix/input-validation",
+      comparison_key = "git::main::bugfix/input-validation",
+    })
+    state.set_commits({
+      {
+        sha = "abc123456789",
+        short_sha = "abc1234",
+        message = "tighten validation",
+        files = { { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } } },
+      },
+    })
+
+    ui.open()
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.explorer_win)
+    send_keys("<Tab>")
+
+    assert.are.equal("select_commit", state.scope_mode())
+    assert.is_nil(state.get().current_commit_idx)
+    local explorer = table.concat(vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false), "\n")
+    assert.is_true(explorer:find("scope", 1, true) ~= nil)
+    assert.is_true(explorer:find("pick", 1, true) ~= nil)
   end)
 
   it("shows a persistent stale context banner in the navigator", function()
@@ -1204,6 +1661,8 @@ describe("review.ui explorer rail", function()
     })
 
     ui.open()
+    state.get_ui().thread_filter = "all"
+    ui.refresh()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
@@ -1273,22 +1732,56 @@ describe("review.ui explorer rail", function()
     local ui_state = state.get_ui()
     vim.api.nvim_set_current_win(ui_state.threads_win)
     vim.api.nvim_win_set_cursor(ui_state.threads_win, { 2, 0 })
-    send_keys("<CR>")
+    send_keys("<Tab>")
     local lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
-    assert.is_true(lines[2]:match("%[open%]") ~= nil)
-    assert.is_true(joined:match("open%.lua") ~= nil)
+    assert.is_true(lines[2]:find("filter:resolved", 1, true) ~= nil)
+    assert.is_true(lines[3]:find("1 thread", 1, true) ~= nil)
+    assert.is_true(joined:match("resolved%.lua") ~= nil or joined:match("reso.*lua") ~= nil)
+    assert.is_nil(joined:match("open%.lua"))
+
+    vim.api.nvim_win_set_cursor(ui_state.threads_win, { 2, 0 })
+    send_keys("<Tab>")
+    lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
+    joined = table.concat(lines, "\n")
+    assert.is_true(lines[2]:find("filter:stale", 1, true) ~= nil)
+    assert.is_nil(joined:match("open%.lua"))
     assert.is_nil(joined:match("resolved%.lua"))
 
-    vim.api.nvim_win_set_cursor(ui_state.threads_win, { 3, 0 })
+    vim.api.nvim_win_set_cursor(ui_state.threads_win, { 2, 0 })
+    send_keys("<Tab>")
+    lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
+    joined = table.concat(lines, "\n")
+    assert.is_true(lines[2]:find("filter:all", 1, true) ~= nil)
+    assert.is_true(joined:match("open%.lua") ~= nil)
+    assert.is_true(joined:match("resolved%.lua") ~= nil or joined:match("reso.*lua") ~= nil)
+
+    local open_group_line
+    for idx, line in ipairs(lines) do
+      if line:find("github/", 1, true) and line:find("%[1%]") then
+        open_group_line = idx
+        break
+      end
+    end
+    assert.is_not_nil(open_group_line)
+    vim.api.nvim_win_set_cursor(ui_state.threads_win, { open_group_line, 0 })
     send_keys("za")
     lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
     assert.is_true(table.concat(lines, "\n"):match("%+ github/") ~= nil)
     assert.is_nil(table.concat(lines, "\n"):match("open%.lua"))
 
-    vim.api.nvim_win_set_cursor(ui_state.threads_win, { 3, 0 })
+    vim.api.nvim_win_set_cursor(ui_state.threads_win, { open_group_line, 0 })
     send_keys("za")
-    vim.api.nvim_win_set_cursor(ui_state.threads_win, { 4, 0 })
+    lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
+    local open_file_line
+    for idx, line in ipairs(lines) do
+      if line:find("open%.lua") then
+        open_file_line = idx
+        break
+      end
+    end
+    assert.is_not_nil(open_file_line)
+    vim.api.nvim_win_set_cursor(ui_state.threads_win, { open_file_line, 0 })
     send_keys("za")
     lines = vim.api.nvim_buf_get_lines(ui_state.threads_buf, 0, -1, false)
     assert.is_true(table.concat(lines, "\n"):match("%* O") ~= nil)
@@ -1407,8 +1900,11 @@ describe("review.ui explorer rail", function()
     state.create("local", "origin/main-with-a-very-long-name", {
       { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
     })
+    state.set_scope_mode("select_commit")
 
     ui.open()
+    state.get_ui().thread_filter = "stale"
+    ui.refresh()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
@@ -1420,7 +1916,7 @@ describe("review.ui explorer rail", function()
     vim.o.columns = original_columns
   end)
 
-  it("uses compact thread counts instead of truncating count labels on narrow rails", function()
+  it("shows a compact total thread count below the thread filter on narrow rails", function()
     local original_columns = vim.o.columns
     vim.o.columns = 80
 
@@ -1452,12 +1948,12 @@ describe("review.ui explorer rail", function()
 
     ui.open()
 
-    local header = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, 1, false)[1]
+    local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, 3, false)
+    local header = thread_lines[1]
     assert.is_true(vim.fn.strdisplaywidth(header) <= vim.api.nvim_win_get_width(state.get_ui().threads_win))
     assert.is_nil(header:find("…", 1, true))
-    assert.is_true(header:find("o1", 1, true) ~= nil)
-    assert.is_true(header:find("d1", 1, true) ~= nil)
-    assert.is_true(header:find("s1", 1, true) ~= nil)
+    assert.is_true(thread_lines[2]:find("filter:open", 1, true) ~= nil)
+    assert.is_true(thread_lines[3]:find("1 thread", 1, true) ~= nil)
 
     vim.o.columns = original_columns
   end)
@@ -1474,8 +1970,11 @@ describe("review.ui explorer rail", function()
         sample_git_file("lua/new.lua", "?", "untracked", 1, 1),
       },
     })
+    state.set_scope_mode("select_commit")
 
     ui.open()
+    state.get_ui().thread_filter = "stale"
+    ui.refresh()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
@@ -1493,6 +1992,7 @@ describe("review.ui explorer rail", function()
     }, {
       merge_base_ref = "1234567890abcdef1234567890abcdef12345678",
     })
+    state.set_scope_mode("select_commit")
 
     ui.open()
 
@@ -1647,6 +2147,8 @@ describe("review.ui explorer rail", function()
     stale.commit_short_sha = "deadbee"
 
     ui.open()
+    state.get_ui().thread_filter = "stale"
+    ui.refresh()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().explorer_buf, 0, -1, false)
     local thread_lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
@@ -1658,10 +2160,9 @@ describe("review.ui explorer rail", function()
       end
     end
     assert.are.equal(1, scratch_count)
-    assert.is_true(
-      table.concat(thread_lines, "\n"):match("missing%.lua.*%[%d+%]") ~= nil
-        or table.concat(thread_lines, "\n"):match("miss.*lua.*%[%d+%]") ~= nil
-    )
+    local thread_text = table.concat(thread_lines, "\n")
+    assert.is_true(thread_text:find("filter:stale", 1, true) ~= nil)
+    assert.is_true(thread_text:find("1 thread", 1, true) ~= nil)
 
     state.set_commits({
       {
@@ -1736,6 +2237,8 @@ describe("review.ui explorer rail", function()
     state.set_remote_context_stale("PR is closed")
 
     ui.open()
+    state.get_ui().thread_filter = "stale"
+    ui.refresh()
 
     local lines = vim.api.nvim_buf_get_lines(state.get_ui().threads_buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
@@ -1959,16 +2462,16 @@ describe("review.ui help", function()
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
 
-    assert.are.equal("Commands", lines[1])
-    assert.is_true(joined:match("Commands") ~= nil)
-    assert.is_true(joined:match("Explorer") ~= nil)
-    assert.is_true(joined:match("Diff") ~= nil)
-    assert.is_true(joined:match("Availability") ~= nil)
-    assert.is_true(joined:match("Open file or thread") ~= nil)
-    assert.is_true(joined:match("Toggle tree/flat file layout") ~= nil)
-    assert.is_true(joined:match("Toggle unified/split view") ~= nil)
+    assert.is_true(lines[1]:find("review.nvim", 1, true) ~= nil)
+    assert.is_true(joined:match("NAVIGATOR") ~= nil)
+    assert.is_true(joined:match("DIFF") ~= nil)
+    assert.is_true(joined:match("COMMANDS") ~= nil)
+    assert.is_true(joined:match("TOOLS") ~= nil)
+    assert.is_true(joined:match("open file, thread") ~= nil)
+    assert.is_nil(joined:match("tree/flat files"))
+    assert.is_true(joined:match("unified/split") ~= nil)
     assert.is_nil(joined:match("AI Review Focus"))
-    assert.is_nil(joined:match("review.nvim"))
+    assert.is_true(joined:find("*review-help*", 1, true) ~= nil)
   end)
 
   it("explains unavailable forge and GitButler tools", function()
@@ -1987,9 +2490,9 @@ describe("review.ui help", function()
     local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
     local joined = table.concat(lines, "\n")
     assert.is_true(joined:find("GitHub", 1, true) ~= nil)
-    assert.is_true(joined:find("unavailable: install gh", 1, true) ~= nil)
+    assert.is_true(joined:find("missing: install gh", 1, true) ~= nil)
     assert.is_true(joined:find("GitButler", 1, true) ~= nil)
-    assert.is_true(joined:find("install but CLI", 1, true) ~= nil)
+    assert.is_true(joined:find("install but", 1, true) ~= nil)
     assert.is_nil(joined:find("GitLab", 1, true))
   end)
 
@@ -2162,16 +2665,14 @@ describe("review.ui help", function()
     local win = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_get_current_buf()
     local cfg = vim.api.nvim_win_get_config(win)
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, 20, false)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local joined = table.concat(lines, "\n")
 
-    assert.are.equal("  :Review [ref]", lines[2])
-    assert.are.equal("      Open review for working tree or ref", lines[3])
-    assert.is_true(vim.tbl_contains(lines, "  :ReviewClipboard"))
-    assert.is_true(vim.tbl_contains(lines, "      Copy local notes, open threads, and"))
-    assert.is_true(vim.tbl_contains(lines, "      discussion"))
+    assert.is_true(lines[1]:find("review.nvim", 1, true) ~= nil)
+    assert.is_true(joined:find(":ReviewClipboard", 1, true) ~= nil)
+    assert.is_true(joined:find("copy all review notes", 1, true) ~= nil)
     assert.is_true(joined:match(":ReviewRefresh") ~= nil)
-    assert.is_true(joined:match("Refresh review data") ~= nil)
+    assert.is_true(joined:match("refresh") ~= nil)
 
     for _, line in ipairs(lines) do
       assert.is_true(vim.fn.strdisplaywidth(line) <= cfg.width)
@@ -2279,6 +2780,25 @@ describe("review.ui notes list", function()
 
     local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_get_current_buf(), 0, -1, false)
     assert.is_true(lines[2]:find("#" .. tostring(note_id), 1, true) ~= nil)
+  end)
+
+  it("deletes local notes from the notes list", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+    state.add_note("lua/review.lua", 2, "delete me", nil, "new")
+
+    local original_confirm = vim.fn.confirm
+    vim.fn.confirm = function()
+      return 1
+    end
+
+    ui.open_notes_list()
+    vim.api.nvim_win_set_cursor(vim.api.nvim_get_current_win(), { 2, 0 })
+    send_keys("d")
+
+    vim.fn.confirm = original_confirm
+    assert.are.equal(0, #state.get_notes())
   end)
 
   it("filters the notes list by search text and status", function()
@@ -2697,6 +3217,7 @@ describe("review.ui notes list", function()
     state.set_commit(2)
     state.add_note("lua/b.lua", 4, "note b", nil, "new")
     state.set_commit(nil)
+    state.set_scope_mode("select_commit")
     vim.fn.setreg('"', "")
 
     ui.open()
@@ -2704,7 +3225,7 @@ describe("review.ui notes list", function()
     local lines = vim.api.nvim_buf_get_lines(ui_state.explorer_buf, 0, -1, false)
     local commit_line
     for idx, line in ipairs(lines) do
-      if line:find("aaaaaaa", 1, true) then
+      if line:match("^%s+aaaaaaa") then
         commit_line = idx
         break
       end
@@ -3013,12 +3534,41 @@ describe("review.ui statusline", function()
 
     local statusline = vim.wo[state.get_ui().diff_win].statusline
 
-    assert.is_true(statusline:match("lua/very_l…nment%.lua") ~= nil)
-    assert.is_true(statusline:match("origi…→feature…  •  stack") ~= nil)
+    assert.is_true(statusline:match("lua/.*%.lua") ~= nil)
+    assert.is_true(statusline:match("origi…→feature…%s+scope: all") ~= nil)
     assert.is_true(statusline:match("%%=") ~= nil)
     assert.is_nil(statusline:match("compare:"))
 
     vim.o.columns = original_columns
+  end)
+
+  it("keeps compare identity stable while stack scope changes", function()
+    state.create("local", "main", {
+      { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } },
+    }, {
+      left_ref = "main",
+      right_ref = "bugfix/input-validation",
+      requested_ref = "main..bugfix/input-validation",
+      comparison_key = "git::main::bugfix/input-validation",
+    })
+    state.set_commits({
+      {
+        sha = "abc123456789",
+        short_sha = "abc1234",
+        message = "first commit message that should not take over the bar",
+        files = { { path = "README.md", status = "M", hunks = { sample_hunk(2, 2) } } },
+      },
+    })
+
+    ui.open()
+    local before = vim.wo[state.get_ui().diff_win].statusline
+    ui.select_commit(1, { scope_mode = "current_commit" })
+    local after = vim.wo[state.get_ui().diff_win].statusline
+
+    assert.is_true(before:find("main", 1, true) ~= nil and before:find("bugfix", 1, true) ~= nil)
+    assert.is_true(after:find("main", 1, true) ~= nil and after:find("bugfix", 1, true) ~= nil)
+    assert.is_true(after:find("scope: abc1234", 1, true) ~= nil)
+    assert.is_nil(after:find("first commit message", 1, true))
   end)
 
   it("shows sync state while a local refresh is loading", function()
@@ -3033,7 +3583,7 @@ describe("review.ui statusline", function()
     assert.is_true(statusline:match("sync") ~= nil)
   end)
 
-  it("suppresses inherited statuslines in the left rail", function()
+  it("uses the shared review statusline in the left rail", function()
     local original_global = vim.o.statusline
     vim.o.statusline = "GLOBAL-STATUSLINE"
 
@@ -3043,11 +3593,31 @@ describe("review.ui statusline", function()
 
     ui.open()
 
-	    local ui_state = state.get_ui()
-	    assert.are.equal(" ", vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.explorer_win }))
+    local ui_state = state.get_ui()
+    local files_statusline = vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.explorer_win })
+    assert.is_true(files_statusline:find("lua/review.lua", 1, true) ~= nil)
+    assert.is_nil(files_statusline:find("GLOBAL-STATUSLINE", 1, true))
 
-	    vim.o.statusline = original_global
-	  end)
+    vim.o.statusline = original_global
+  end)
+
+  it("shares one statusline value across split diff panes", function()
+    state.create("local", "origin/main", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(2, 2) } },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    local files_statusline = vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.explorer_win })
+    local old_statusline = vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.diff_win })
+    local new_statusline = vim.api.nvim_get_option_value("statusline", { scope = "local", win = ui_state.split_win })
+
+    assert.are.equal(files_statusline, old_statusline)
+    assert.are.equal(old_statusline, new_statusline)
+    assert.is_true(new_statusline:find("lua/review.lua", 1, true) ~= nil)
+  end)
 end)
 
 describe("review.ui highlights", function()
@@ -3177,5 +3747,125 @@ describe("review.ui diff gutters", function()
 
     assert.are.equal(old_sep, old_lines[2]:find("│"))
     assert.are.equal(new_sep, new_lines[2]:find("│"))
+  end)
+
+  it("yanks diff visual selections without gutter line numbers", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    vim.api.nvim_win_set_cursor(ui_state.diff_win, { 1, 0 })
+    vim.fn.setreg('"', "")
+    vim.cmd("normal! V")
+    send_keys("y")
+
+    local yanked = vim.fn.getreg('"')
+    assert.are.equal("context", yanked)
+    assert.is_nil(yanked:find("│", 1, true))
+    assert.is_nil(yanked:find("19999", 1, true))
+  end)
+
+  it("keeps the unified diff cursor out of the gutter", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    local line = vim.api.nvim_buf_get_lines(ui_state.diff_buf, 0, 1, false)[1]
+    local _, gutter_end = line:find("│.│")
+
+    vim.api.nvim_win_set_cursor(ui_state.diff_win, { 1, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = ui_state.diff_buf })
+
+    assert.are.equal(gutter_end, vim.api.nvim_win_get_cursor(ui_state.diff_win)[2])
+  end)
+
+  it("starts visual block from the unified diff code column", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    local line = vim.api.nvim_buf_get_lines(ui_state.diff_buf, 0, 1, false)[1]
+    local _, gutter_end = line:find("│.│")
+
+    vim.api.nvim_win_set_cursor(ui_state.diff_win, { 1, 0 })
+    send_keys("<C-v>")
+
+    assert.are.equal(gutter_end, vim.api.nvim_win_get_cursor(ui_state.diff_win)[2])
+    assert.are.equal("\22", vim.fn.mode())
+    send_keys("<Esc>")
+  end)
+
+  it("starts visual block from the split diff code column", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    local line = vim.api.nvim_buf_get_lines(ui_state.split_buf, 0, 1, false)[1]
+    local _, gutter_end = line:find("│.│")
+
+    vim.api.nvim_win_set_cursor(ui_state.split_win, { 1, 0 })
+    send_keys("<C-v>")
+
+    assert.are.equal(gutter_end, vim.api.nvim_win_get_cursor(ui_state.split_win)[2])
+    assert.are.equal("\22", vim.fn.mode())
+    send_keys("<Esc>")
+  end)
+
+  it("yanks split diff visual selections without gutter line numbers or signs", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    vim.api.nvim_win_set_cursor(ui_state.split_win, { 1, 0 })
+    vim.fn.setreg('"', "")
+    vim.cmd("normal! V")
+    send_keys("y")
+
+    local yanked = vim.fn.getreg('"')
+    assert.are.equal("context", yanked)
+    assert.is_nil(yanked:find("│", 1, true))
+    assert.is_nil(yanked:find("+", 1, true))
+    assert.is_nil(yanked:find("19999", 1, true))
+  end)
+
+  it("keeps split diff cursors out of the gutter", function()
+    state.create("local", "HEAD", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(20000, 20000) } },
+    })
+
+    ui.open()
+    ui.toggle_split()
+
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.split_win)
+    local line = vim.api.nvim_buf_get_lines(ui_state.split_buf, 0, 1, false)[1]
+    local _, gutter_end = line:find("│.│")
+
+    vim.api.nvim_win_set_cursor(ui_state.split_win, { 1, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = ui_state.split_buf })
+
+    assert.are.equal(gutter_end, vim.api.nvim_win_get_cursor(ui_state.split_win)[2])
   end)
 end)

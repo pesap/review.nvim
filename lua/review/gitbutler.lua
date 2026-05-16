@@ -389,6 +389,38 @@ function M.workspace_review()
 
   local files = {}
   local commits = {}
+
+  local unassigned_change_types = {}
+  for _, change in ipairs(status.unassignedChanges or {}) do
+    local path = change.filePath or change.path
+    if path then
+      unassigned_change_types[path] = change.changeType or change.status
+    end
+  end
+  local unassigned, unassigned_err = M.diff_files(nil, {
+    unassigned = true,
+    gitbutler = { kind = "unassigned" },
+    paths_by_path = unassigned_change_types,
+    change_types_by_path = unassigned_change_types,
+  })
+  if not unassigned then
+    return nil, unassigned_err
+  end
+  if #unassigned > 0 then
+    merge_files(files, unassigned)
+    table.insert(commits, {
+      sha = "gitbutler-unassigned",
+      short_sha = "unassgn",
+      message = "unassigned changes",
+      author = "",
+      files = unassigned,
+      gitbutler = {
+        kind = "unassigned",
+        unpublished = true,
+      },
+    })
+  end
+
   for _, stack in ipairs(status.stacks or {}) do
     local assigned_change_types = {}
     for _, change in ipairs(stack.assignedChanges or {}) do
@@ -429,37 +461,6 @@ function M.workspace_review()
     end
   end
 
-  local unassigned_change_types = {}
-  for _, change in ipairs(status.unassignedChanges or {}) do
-    local path = change.filePath or change.path
-    if path then
-      unassigned_change_types[path] = change.changeType or change.status
-    end
-  end
-  local unassigned, unassigned_err = M.diff_files(nil, {
-    unassigned = true,
-    gitbutler = { kind = "unassigned" },
-    paths_by_path = unassigned_change_types,
-    change_types_by_path = unassigned_change_types,
-  })
-  if not unassigned then
-    return nil, unassigned_err
-  end
-  if #unassigned > 0 then
-    merge_files(files, unassigned)
-    table.insert(commits, {
-      sha = "gitbutler-unassigned",
-      short_sha = "unassgn",
-      message = "unassigned changes",
-      author = "",
-      files = unassigned,
-      gitbutler = {
-        kind = "unassigned",
-        unpublished = true,
-      },
-    })
-  end
-
   return {
     files = files,
     untracked_files = {},
@@ -479,6 +480,24 @@ function M.workspace_review_async(callback)
     local files = {}
     local commits = {}
     local tasks = {}
+
+    local unassigned_change_types = {}
+    for _, change in ipairs(status.unassignedChanges or {}) do
+      local path = change.filePath or change.path
+      if path then
+        unassigned_change_types[path] = change.changeType or change.status
+      end
+    end
+    table.insert(tasks, {
+      kind = "unassigned",
+      target = nil,
+      opts = {
+        unassigned = true,
+        gitbutler = { kind = "unassigned" },
+        paths_by_path = unassigned_change_types,
+        change_types_by_path = unassigned_change_types,
+      },
+    })
 
     for _, stack in ipairs(status.stacks or {}) do
       local assigned_change_types = {}
@@ -512,24 +531,6 @@ function M.workspace_review_async(callback)
         end
       end
     end
-
-    local unassigned_change_types = {}
-    for _, change in ipairs(status.unassignedChanges or {}) do
-      local path = change.filePath or change.path
-      if path then
-        unassigned_change_types[path] = change.changeType or change.status
-      end
-    end
-    table.insert(tasks, {
-      kind = "unassigned",
-      target = nil,
-      opts = {
-        unassigned = true,
-        gitbutler = { kind = "unassigned" },
-        paths_by_path = unassigned_change_types,
-        change_types_by_path = unassigned_change_types,
-      },
-    })
 
     local pending = #tasks
     local first_err = nil

@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>review.nvim Interaction Flow</title>
+  <style>
+    :root {
+      --canvas: #eef2f6;
+      --paper: #fbfcfe;
+      --ink: #18222d;
+      --muted: #647180;
+      --line: #cbd5e1;
+      --screen: #ffffff;
+      --blue: #dcecff;
+      --green: #e3f6eb;
+      --yellow: #fff2c8;
+      --purple: #efe8ff;
+      --red: #ffe4e4;
+      --dark: #263241;
+      --accent: #2166d5;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.35;
+    }
+
+    main {
+      width: min(1680px, calc(100vw - 28px));
+      margin: 0 auto;
+      padding: 20px 0 36px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: end;
+      padding: 0 0 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .doc-meta {
+      display: grid;
+      grid-template-columns: repeat(3, auto);
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 4px 9px;
+      white-space: nowrap;
+    }
+
+    .board {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+
+    aside,
+    .canvas {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    aside {
+      position: sticky;
+      top: 12px;
+      padding: 14px;
+    }
+
+    .canvas {
+      padding: 16px;
+      overflow: auto;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .ref-section {
+      padding: 11px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .ref-section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .legend-row {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 8px;
+      align-items: center;
+      margin: 7px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .symbol {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 30px;
+      height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--dark);
+    }
+
+    .line-sample {
+      height: 2px;
+      background: var(--accent);
+      position: relative;
+      width: 28px;
+    }
+
+    .line-sample::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      border-left: 8px solid var(--accent);
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+    }
+
+    .decision-symbol {
+      width: 24px;
+      height: 24px;
+      background: var(--yellow);
+      border: 1px solid #d9b85f;
+      transform: rotate(45deg);
+      margin-left: 3px;
+    }
+
+    .micro-symbol {
+      width: 28px;
+      height: 22px;
+      border: 1px solid #9ab6d9;
+      background: var(--blue);
+      border-radius: 5px;
+    }
+
+    .flow {
+      min-width: 1120px;
+      display: grid;
+      grid-template-columns: repeat(12, 86px);
+      grid-auto-rows: minmax(60px, auto);
+      gap: 16px;
+      position: relative;
+    }
+
+    .screen {
+      background: var(--screen);
+      border: 1px solid #aeb8c5;
+      border-radius: 8px;
+      box-shadow: 0 2px 0 rgba(25, 35, 45, 0.06);
+      overflow: hidden;
+    }
+
+    .screen-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 32px;
+      padding: 7px 9px;
+      background: #f5f7fa;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .screen-title span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .screen-body {
+      padding: 9px;
+      min-height: 154px;
+    }
+
+    .ui-row {
+      height: 20px;
+      margin: 6px 0;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 6px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .ui-row.active {
+      border-color: #8fb6e8;
+      background: var(--blue);
+      color: #153c75;
+      font-weight: 700;
+    }
+
+    .ui-row.note {
+      background: var(--yellow);
+      border-color: #d8bd66;
+      color: #694f00;
+    }
+
+    .split-layout {
+      display: grid;
+      grid-template-columns: 0.72fr 1.45fr 0.85fr;
+      gap: 8px;
+    }
+
+    .rail-box,
+    .diff-box,
+    .thread-box {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      min-height: 126px;
+      padding: 6px;
+      background: #fff;
+    }
+
+    .rail-box { background: #f7fbff; }
+    .diff-box { background: #fbfdff; }
+    .thread-box { background: #fffaf0; }
+
+    .diff-line {
+      height: 18px;
+      border-radius: 3px;
+      margin: 5px 0;
+      background: #eef2f7;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      overflow: hidden;
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .gutter {
+      background: #e2e8f0;
+      border-right: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .code {
+      display: flex;
+      align-items: center;
+      padding-left: 6px;
+    }
+
+    .add .code { background: #e8f7ef; }
+    .del .code { background: #ffecec; }
+
+    .card {
+      border: 1px solid #9ab6d9;
+      border-radius: 7px;
+      background: var(--blue);
+      padding: 9px;
+      font-size: 11px;
+      box-shadow: 0 2px 0 rgba(25, 35, 45, 0.05);
+    }
+
+    .card h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+    }
+
+    .card dl {
+      margin: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .card dt {
+      font-weight: 700;
+      color: #153c75;
+    }
+
+    .card dd {
+      margin: 1px 0 0;
+      color: #304256;
+    }
+
+    .decision {
+      background: var(--yellow);
+      border: 1px solid #d8bd66;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      min-height: 82px;
+      font-weight: 700;
+      color: #594507;
+    }
+
+    .connector {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 22px;
+      min-height: 40px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+      margin-top: -8px;
+    }
+
+    .s1 { grid-column: 1 / span 4; grid-row: 1; }
+    .c1 { grid-column: 5; grid-row: 1; }
+    .s2 { grid-column: 6 / span 4; grid-row: 1; }
+    .d1 { grid-column: 10 / span 2; grid-row: 1; }
+    .s3 { grid-column: 1 / span 4; grid-row: 3; }
+    .c2 { grid-column: 5; grid-row: 3; }
+    .s4 { grid-column: 6 / span 4; grid-row: 3; }
+    .c3 { grid-column: 10; grid-row: 3; }
+    .s5 { grid-column: 11 / span 2; grid-row: 3; }
+    .m1 { grid-column: 1 / span 3; grid-row: 2; }
+    .m2 { grid-column: 6 / span 3; grid-row: 2; }
+    .m3 { grid-column: 10 / span 3; grid-row: 2; }
+    .m4 { grid-column: 1 / span 3; grid-row: 4; }
+    .m5 { grid-column: 6 / span 3; grid-row: 4; }
+    .m6 { grid-column: 10 / span 3; grid-row: 4; }
+
+    kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      min-width: 26px;
+      padding: 2px 6px;
+      border: 1px solid #9aa8b8;
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      background: #fff;
+      color: #0f1720;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .footer-note {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      header,
+      .board {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>review.nvim Interaction Flow</h1>
+        <p class="subtitle">Wireflow-style UX handoff: screens, triggers, feedback, rules, and modes for core reviewer interactions.</p>
+      </div>
+      <div class="doc-meta">
+        <span class="pill">Artifact: IX Flow</span>
+        <span class="pill">Scope: Review tab</span>
+        <span class="pill">Audience: UX + dev</span>
+      </div>
+    </header>
+
+    <div class="board">
+      <aside>
+        <h2>Reference Panel</h2>
+
+        <div class="ref-section">
+          <h3>Symbols</h3>
+          <div class="legend-row"><span class="symbol">key</span><span>User-initiated keyboard trigger</span></div>
+          <div class="legend-row"><span class="line-sample"></span><span>Flow direction or next state</span></div>
+          <div class="legend-row"><span class="decision-symbol"></span><span>Decision or constraint</span></div>
+          <div class="legend-row"><span class="micro-symbol"></span><span>Microinteraction details</span></div>
+        </div>
+
+        <div class="ref-section">
+          <h3>Microinteraction Fields</h3>
+          <div class="legend-row"><span class="symbol">T</span><span>Trigger: what starts the interaction</span></div>
+          <div class="legend-row"><span class="symbol">F</span><span>Feedback: what visibly changes</span></div>
+          <div class="legend-row"><span class="symbol">R</span><span>Rules: constraints and edge cases</span></div>
+          <div class="legend-row"><span class="symbol">M</span><span>Modes: alternate behavior by surface/state</span></div>
+        </div>
+
+        <div class="ref-section">
+          <h3>Surfaces</h3>
+          <div class="legend-row"><span class="symbol">Files</span><span>Left rail file and review-unit navigator</span></div>
+          <div class="legend-row"><span class="symbol">Diff</span><span>Unified or split code review surface</span></div>
+          <div class="legend-row"><span class="symbol">Threads</span><span>Right rail local/remote/stale queue</span></div>
+          <div class="legend-row"><span class="symbol">Modal</span><span>Prompt, popup, notes list, blame, history</span></div>
+        </div>
+      </aside>
+
+      <section class="canvas">
+        <div class="flow">
+          <div class="screen s1">
+            <div class="screen-title">A. Review Opens <span>:Review</span></div>
+            <div class="screen-body split-layout">
+              <div class="rail-box">
+                <div class="ui-row active">[F] Files</div>
+                <div class="ui-row">lua/review.lua</div>
+                <div class="ui-row">lua/ui.lua</div>
+                <div class="ui-row note">scope rows hidden by default</div>
+              </div>
+              <div class="diff-box">
+                <div class="diff-line"><div class="gutter">12 +</div><div class="code">code line</div></div>
+                <div class="diff-line add"><div class="gutter">13 +</div><div class="code">added code</div></div>
+                <div class="diff-line del"><div class="gutter">14 -</div><div class="code">removed code</div></div>
+              </div>
+              <div class="thread-box">
+                <div class="ui-row">[T] Threads</div>
+                <div class="ui-row">local note</div>
+                <div class="ui-row">github thread</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="connector c1">→</div>
+
+          <div class="screen s2">
+            <div class="screen-title">B. Select File Or Scope <span>Files rail</span></div>
+            <div class="screen-body">
+              <div class="ui-row active">&lt;CR&gt; on file -> focus diff</div>
+              <div class="ui-row">&lt;Tab&gt; -> cycle scope mode</div>
+              <div class="ui-row">C on unit -> compare</div>
+              <div class="ui-row">&lt;leader&gt;B -> change base</div>
+              <div class="ui-row">s -> return to last diff/split</div>
+            </div>
+          </div>
+
+          <div class="decision d1">Need a different comparison base or unit?</div>
+
+          <div class="card m1">
+            <h4>Microinteraction: Open Review</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>:Review</kbd>, <kbd>:Review main</kbd>, or <kbd>:ReviewToggle</kbd>.</dd>
+              <dt>Feedback</dt><dd>Review tab opens with Files, Diff, and Threads surfaces.</dd>
+              <dt>Rules</dt><dd>GitButler workspaces use GitButler merge base; regular local sessions can change base later.</dd>
+              <dt>Modes</dt><dd>Local, explicit ref, PR/MR, GitButler.</dd>
+            </dl>
+          </div>
+
+          <div class="card m2">
+            <h4>Microinteraction: Choose Scope</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>&lt;Tab&gt;</kbd> cycles all/current/select commit modes.</dd>
+              <dt>Feedback</dt><dd>File list and thread queue filter to the active review unit.</dd>
+              <dt>Rules</dt><dd>Select-commit mode exposes commit/GitButler unit rows. Normal mode keeps the rail clean.</dd>
+              <dt>Modes</dt><dd>All changes, current commit, selected commit/unit.</dd>
+            </dl>
+          </div>
+
+          <div class="card m3">
+            <h4>Microinteraction: Change Base</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>&lt;leader&gt;B</kbd> or <kbd>:ReviewChangeBase [ref]</kbd>.</dd>
+              <dt>Feedback</dt><dd>Prompt asks for ref when omitted; review re-diffs after selection.</dd>
+              <dt>Rules</dt><dd>Only local git review sessions. GitButler base is fixed to workspace merge base.</dd>
+              <dt>Modes</dt><dd>Prompt mode, direct command mode, baseline compare mode.</dd>
+            </dl>
+          </div>
+
+          <div class="screen s3">
+            <div class="screen-title">C. Change Base Prompt <span>&lt;leader&gt;B</span></div>
+            <div class="screen-body">
+              <div class="ui-row active">Review base: main</div>
+              <div class="ui-row">User enters: HEAD~2 / origin/main / commit SHA</div>
+              <div class="ui-row note">System reloads diff against chosen base</div>
+              <div class="ui-row">Files and threads refresh</div>
+            </div>
+          </div>
+
+          <div class="connector c2">→</div>
+
+          <div class="screen s4">
+            <div class="screen-title">D. Compare Units <span>C</span></div>
+            <div class="screen-body">
+              <div class="ui-row active">Current unit: abc1234</div>
+              <div class="ui-row">Compare with: def5678</div>
+              <div class="ui-row note">Overlap: shared files</div>
+              <div class="ui-row">Left only: abc files</div>
+              <div class="ui-row">Right only: def files</div>
+            </div>
+          </div>
+
+          <div class="connector c3">→</div>
+
+          <div class="screen s5">
+            <div class="screen-title">E. Review + Deliver <span>Diff / Notes</span></div>
+            <div class="screen-body">
+              <div class="ui-row active">Select code with V or &lt;C-v&gt;</div>
+              <div class="ui-row">a -> add note</div>
+              <div class="ui-row">S -> suggestion</div>
+              <div class="ui-row">N -> notes list</div>
+              <div class="ui-row note">P / y / u / Y -> publish or handoff</div>
+            </div>
+          </div>
+
+          <div class="card m4">
+            <h4>Microinteraction: Compare Units</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>C</kbd> from a unit row, or <kbd>:ReviewCompareUnit [idx]</kbd>.</dd>
+              <dt>Feedback</dt><dd>Centered comparison popup shows overlap, left-only, and right-only file groups.</dd>
+              <dt>Rules</dt><dd>Requires at least two review units and a selected/current unit. If no target is provided, a picker opens.</dd>
+              <dt>Modes</dt><dd>Direct target from selected row, picker target, command target.</dd>
+            </dl>
+          </div>
+
+          <div class="card m5">
+            <h4>Microinteraction: Review Code</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>&lt;CR&gt;</kbd> opens file, <kbd>]c</kbd>/<kbd>[c</kbd> move hunks, <kbd>s</kbd> toggles split in diff.</dd>
+              <dt>Feedback</dt><dd>Diff cursor stays on code; split view preserves scroll and returns from rails with <kbd>s</kbd>.</dd>
+              <dt>Rules</dt><dd>Visual selections and yanks exclude line numbers and diff signs.</dd>
+              <dt>Modes</dt><dd>Unified diff, split diff, visual line, visual block.</dd>
+            </dl>
+          </div>
+
+          <div class="card m6">
+            <h4>Microinteraction: Deliver Feedback</h4>
+            <dl>
+              <dt>Trigger</dt><dd><kbd>N</kbd> opens notes list; <kbd>s</kbd> stages; <kbd>P</kbd> publishes.</dd>
+              <dt>Feedback</dt><dd>Notes move through draft/staged/published states; clipboard commands confirm copy target.</dd>
+              <dt>Rules</dt><dd>GitButler notes publish only when a remote review target can be resolved.</dd>
+              <dt>Modes</dt><dd>Draft, staged, resolved, published, stale, local-only handoff.</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="footer-note">
+          Interaction-flow intent: each card documents the trigger, feedback, rules, and modes for a specific UI behavior, while the wireframes show where the user performs that action and what screen/popup appears next.
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

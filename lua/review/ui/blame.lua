@@ -115,6 +115,11 @@ function M.close()
   end
   ui_state.blame_win = nil
   ui_state.blame_buf = nil
+  local rail_win = ui_state.files_win or ui_state.explorer_win
+  if rail_win and ui_state.explorer_width and vim.api.nvim_win_is_valid(rail_win) then
+    vim.wo[rail_win].winfixwidth = false
+    vim.api.nvim_win_set_width(rail_win, ui_state.explorer_width)
+  end
   restore_diff_scrollbind(ui_state)
 end
 
@@ -153,6 +158,9 @@ local function open_panel(file, ref, mode, lines, opts)
   end
 
   local original = vim.api.nvim_get_current_win()
+  local rail_win = ui_state.files_win or ui_state.explorer_win
+  local rail_width = ui_state.explorer_width
+    or (rail_win and vim.api.nvim_win_is_valid(rail_win) and vim.api.nvim_win_get_width(rail_win) or nil)
   vim.api.nvim_set_current_win(ui_state.diff_win)
   vim.cmd("leftabove vsplit")
   local win = vim.api.nvim_get_current_win()
@@ -167,10 +175,15 @@ local function open_panel(file, ref, mode, lines, opts)
   vim.bo[buf].modifiable = false
   ui_state.blame_win = win
   ui_state.blame_buf = buf
+  if rail_win and rail_width and vim.api.nvim_win_is_valid(rail_win) then
+    vim.wo[rail_win].winfixwidth = false
+    vim.api.nvim_win_set_width(rail_win, rail_width)
+    ui_state.explorer_width = rail_width
+  end
   sync_blame_scroll(ui_state)
 
   local keymap_opts = { buffer = buf, noremap = true, silent = true }
-  vim.keymap.set("n", "b", M.close, keymap_opts)
+  vim.keymap.set("n", "B", M.close, keymap_opts)
   vim.keymap.set("n", "<Esc>", M.close, keymap_opts)
   vim.keymap.set("n", "q", M.close, keymap_opts)
   vim.keymap.set("n", "t", function()

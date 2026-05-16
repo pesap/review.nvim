@@ -117,6 +117,8 @@ describe("review note export and clearing", function()
     assert.is_true(content:match("## Discussion") ~= nil)
     assert.is_true(content:match("General discussion body") ~= nil)
     assert.is_nil(content:match("Resolved body"))
+    assert.is_nil(content:match("```diff"))
+    assert.is_nil(content:match("\n\n\n"))
   end)
 
   it("exports durable handoff packets with ids, units, refs, and hunk context", function()
@@ -830,6 +832,134 @@ describe("review open session metadata", function()
       assert.are.equal(1, saved_sessions)
     end)
     package.loaded["review.storage"].save = original_save
+    assert.is_true(ok, err)
+  end)
+
+  it("opens an explicit two-ref comparison session", function()
+    local git_module = package.loaded["review.git"]
+    local original_ref_exists = git_module.ref_exists
+    local original_diff_range = git_module.diff_range
+    local original_log = git_module.log
+    local original_root = git_module.root
+    local original_current_branch = git_module.current_branch
+    local original_merge_base = git_module.merge_base
+
+    git_module.ref_exists = function(ref)
+      return ref == "v1.0.0" or ref == "release"
+    end
+    git_module.diff_range = function(left, right)
+      assert.are.equal("v1.0.0", left)
+      assert.are.equal("release", right)
+      return table.concat({
+        "diff --git a/lua/compare.lua b/lua/compare.lua",
+        "index 1111111..2222222 100644",
+        "--- a/lua/compare.lua",
+        "+++ b/lua/compare.lua",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      }, "\n")
+    end
+    git_module.log = function(left, right)
+      assert.are.equal("v1.0.0", left)
+      assert.are.equal("release", right)
+      return {
+        { sha = "compare123", short_sha = "compare", message = "Compare release", author = "psanchez" },
+      }
+    end
+    git_module.root = function()
+      return "/tmp/review-spec"
+    end
+    git_module.current_branch = function()
+      return "feature/export-notes"
+    end
+    git_module.merge_base = function(left, right)
+      assert.are.equal("v1.0.0", left)
+      assert.are.equal("release", right)
+      return "merge-base-sha"
+    end
+
+    local ok, err = pcall(function()
+      assert.is_true(review._open_with_refs("v1.0.0", "release", { open_ui = false }))
+      assert.are.equal("v1.0.0", state.get().left_ref)
+      assert.are.equal("release", state.get().right_ref)
+      assert.are.equal("v1.0.0..release", state.get().requested_ref)
+      assert.are.equal("lua/compare.lua", state.get().files[1].path)
+      assert.are.equal("compare123", state.get().commits[1].sha)
+    end)
+
+    git_module.ref_exists = original_ref_exists
+    git_module.diff_range = original_diff_range
+    git_module.log = original_log
+    git_module.root = original_root
+    git_module.current_branch = original_current_branch
+    git_module.merge_base = original_merge_base
+    assert.is_true(ok, err)
+  end)
+
+  it("returns from a compare session to the previous explicit review", function()
+    local git_module = package.loaded["review.git"]
+    local original_ref_exists = git_module.ref_exists
+    local original_diff_range = git_module.diff_range
+    local original_diff = git_module.diff
+    local original_log = git_module.log
+    local original_root = git_module.root
+    local original_current_branch = git_module.current_branch
+
+    git_module.ref_exists = function()
+      return true
+    end
+    git_module.diff_range = function()
+      return table.concat({
+        "diff --git a/lua/compare.lua b/lua/compare.lua",
+        "--- a/lua/compare.lua",
+        "+++ b/lua/compare.lua",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      }, "\n")
+    end
+    git_module.diff = function(ref)
+      assert.are.equal("feature/base", ref)
+      return table.concat({
+        "diff --git a/lua/base.lua b/lua/base.lua",
+        "--- a/lua/base.lua",
+        "+++ b/lua/base.lua",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      }, "\n")
+    end
+    git_module.log = function()
+      return {}
+    end
+    git_module.root = function()
+      return "/tmp/review-spec"
+    end
+    git_module.current_branch = function()
+      return "feature/export-notes"
+    end
+
+    local ok, err = pcall(function()
+      assert.is_true(review._open_with_refs("v1.0.0", "release", {
+        open_ui = false,
+        previous_review = { kind = "git_ref", ref = "feature/base" },
+      }))
+      assert.are.equal("feature/base", state.get().previous_review.ref)
+      assert.is_true(review.back())
+      assert.are.equal("feature/base", state.get().requested_ref)
+      assert.are.equal("lua/base.lua", state.get().files[1].path)
+    end)
+
+    git_module.ref_exists = original_ref_exists
+    git_module.diff_range = original_diff_range
+    git_module.diff = original_diff
+    git_module.log = original_log
+    git_module.root = original_root
+    git_module.current_branch = original_current_branch
     assert.is_true(ok, err)
   end)
 

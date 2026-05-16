@@ -111,6 +111,40 @@ describe("review.ui.blame", function()
     assert.is_nil(state.get_ui().blame_win)
   end)
 
+  it("preserves the left rail width across repeated opens", function()
+    local ui_state = state.get_ui()
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+    vim.cmd("leftabove vertical new")
+    local rail_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_width(rail_win, 24)
+    ui_state.files_win = rail_win
+    ui_state.explorer_win = rail_win
+    ui_state.explorer_width = 24
+    vim.api.nvim_set_current_win(ui_state.diff_win)
+
+    blame.toggle({ path = "lua/review.lua" }, {
+      next_request_token = function()
+        return 1
+      end,
+      request_is_current = function()
+        return true
+      end,
+    })
+
+    local initial_width = vim.api.nvim_win_get_width(ui_state.files_win)
+    blame.close()
+    blame.toggle({ path = "lua/review.lua" }, {
+      next_request_token = function()
+        return 2
+      end,
+      request_is_current = function()
+        return true
+      end,
+    })
+
+    assert.are.equal(initial_width, vim.api.nvim_win_get_width(ui_state.files_win))
+  end)
+
   it("scrollbinds blame with the unified diff and clears it on close", function()
     blame.toggle({ path = "lua/review.lua" }, {
       next_request_token = function()

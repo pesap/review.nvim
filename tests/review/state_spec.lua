@@ -198,6 +198,26 @@ describe("review.state note indexes", function()
     assert.are.equal("def67890 2026-05-15 reviewer fix context", note.log_context)
   end)
 
+  it("tags local notes with the active comparison pair", function()
+    state.create("local", "v1.0.0", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(10, 10) } },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/state-spec",
+      left_ref = "v1.0.0",
+      right_ref = "v1.1.0",
+      requested_ref = "v1.0.0..v1.1.0",
+      comparison_key = "git::v1.0.0::v1.1.0",
+    })
+
+    state.add_note("lua/review.lua", 12, "compare note", nil, "new")
+
+    local note = state.get_notes("lua/review.lua")[1]
+    assert.are.equal("git::v1.0.0::v1.1.0", note.comparison_key)
+    assert.are.equal("v1.0.0", note.comparison.left_ref)
+    assert.are.equal("v1.1.0", note.comparison.right_ref)
+  end)
+
   it("attaches blame and log context to an existing local note", function()
     state.add_note("lua/review.lua", 12, "draft", nil, "new")
     local note = state.get_notes("lua/review.lua")[1]
@@ -293,6 +313,50 @@ describe("review.state note indexes", function()
     assert.are.equal("commit scoped", scoped[1].body)
     assert.are.equal(1, #stale_notes)
     assert.are.equal("stale", stale_notes[1].body)
+  end)
+
+  it("keeps GitButler branch-scoped notes visible when branch commit shas change", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = {} },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "gitbutler/workspace",
+      requested_ref = nil,
+      untracked_files = {},
+      vcs = "gitbutler",
+    })
+    state.set_commits({
+      {
+        sha = "oldsha123456",
+        short_sha = "oldsha1",
+        message = "feature/a",
+        author = "psanchez",
+        files = { { path = "lua/review.lua", status = "M", hunks = {} } },
+        gitbutler = { kind = "branch", branch_name = "feature/a", branch_cli_id = "at" },
+      },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+
+    state.add_note("lua/review.lua", 12, "branch scoped", nil, "new")
+
+    state.set_commits({
+      {
+        sha = "newsha654321",
+        short_sha = "newsha6",
+        message = "feature/a",
+        author = "psanchez",
+        files = { { path = "lua/review.lua", status = "M", hunks = {} } },
+        gitbutler = { kind = "branch", branch_name = "feature/a", branch_cli_id = "at" },
+      },
+    })
+    state.set_commit(1)
+
+    local scoped, stale_notes = state.scoped_notes()
+
+    assert.are.equal(1, #scoped)
+    assert.are.equal("branch scoped", scoped[1].body)
+    assert.are.equal(0, #stale_notes)
   end)
 
   it("marks remote threads stale when the review context is outdated", function()

@@ -274,6 +274,16 @@ function M.default_branch()
     cached_default_branch = "master"
     return cached_default_branch
   end
+  _ = run_systemlist({ "git", "rev-parse", "--verify", "main" })
+  if _ then
+    cached_default_branch = "main"
+    return cached_default_branch
+  end
+  _ = run_systemlist({ "git", "rev-parse", "--verify", "master" })
+  if _ then
+    cached_default_branch = "master"
+    return cached_default_branch
+  end
   return nil
 end
 
@@ -290,6 +300,19 @@ function M.diff(ref)
     return ""
   end
   return out
+end
+
+--- Get the unified diff text between two refs.
+---@param left_ref string
+---@param right_ref string
+---@return string diff_text
+---@return string|nil err
+function M.diff_range(left_ref, right_ref)
+  local out, err = run_system({ "git", "diff", left_ref, right_ref })
+  if not out then
+    return "", err
+  end
+  return out, nil
 end
 
 ---@param ref string|nil
@@ -312,6 +335,39 @@ function M.diff_async(ref, callback)
   end
   vim.system(
     cmd,
+    { text = true },
+    vim.schedule_wrap(function(obj)
+      if obj.code ~= 0 then
+        local err = obj.stderr ~= "" and obj.stderr or obj.stdout
+        for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+          cb("", err)
+        end
+        return
+      end
+      for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+        cb(obj.stdout or "", nil)
+      end
+    end)
+  )
+end
+
+---@param left_ref string
+---@param right_ref string
+---@param callback fun(diff_text: string, err: string|nil)
+function M.diff_range_async(left_ref, right_ref, callback)
+  local key = tostring(left_ref or "") .. ".." .. tostring(right_ref or "")
+  if queue_pending(pending_context.diff, key, callback) then
+    return
+  end
+  if vim.fn.executable("git") ~= 1 then
+    local err = "git is not executable"
+    for _, cb in ipairs(take_pending(pending_context.diff, key)) do
+      cb("", err)
+    end
+    return
+  end
+  vim.system(
+    { "git", "diff", left_ref, right_ref },
     { text = true },
     vim.schedule_wrap(function(obj)
       if obj.code ~= 0 then
@@ -641,6 +697,27 @@ function M.current_head()
   return out and out[1] or nil
 end
 
+---@param ref string
+---@return boolean
+function M.ref_exists(ref)
+  if not ref or ref == "" then
+    return false
+  end
+  return run_systemlist({ "git", "rev-parse", "--verify", ref }) ~= nil
+end
+
+---@return string[]
+function M.local_branches()
+  local out = run_systemlist({ "git", "for-each-ref", "--format=%(refname:short)", "refs/heads" })
+  return out or {}
+end
+
+---@return string[]
+function M.tags()
+  local out = run_systemlist({ "git", "tag", "--list", "--sort=-creatordate" })
+  return out or {}
+end
+
 ---@param base_ref string|nil
 ---@param head_ref string|nil
 ---@return string|nil sha
@@ -806,6 +883,21 @@ function M.log(base_ref, head_ref)
   local commits = parse_log_lines(out)
   context_cache.log[key] = vim.deepcopy(commits)
   return commits
+end
+
+---@param limit number|nil
+---@return ReviewCommit[]
+function M.recent_commits(limit)
+  limit = limit or 20
+  local out = run_systemlist({
+    "git",
+    "log",
+    "--format=%H\t%s\t%an",
+    "-n",
+    tostring(limit),
+    "--all",
+  })
+  return parse_log_lines(out or {})
 end
 
 ---@param base_ref string

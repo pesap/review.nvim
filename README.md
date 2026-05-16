@@ -67,6 +67,8 @@ lazy.nvim:
 :ReviewChangeBase main " re-diff the active local review against another base
 :ReviewMarkBaseline " mark current HEAD and current file state as a before-fix baseline
 :ReviewCompareBaseline " compare current work against the marked baseline
+:ReviewCompare      " open the Files-pane comparison explorer
+:ReviewBack         " return to the review that was open before compare
 :ReviewCompareUnit 2 " compare the selected/current review unit with another unit
 :ReviewExport        " export notes to markdown
 :ReviewClipboard     " copy all notes to the clipboard
@@ -122,12 +124,12 @@ require("review").setup({
     sort_files = "o",
     toggle_reviewed = "H",
     filter_attention = "A",
-    change_base = "B",
+    change_base = "<leader>B",
     mark_baseline = "M",
-    compare_baseline = "V",
+    compare_baseline = "<leader>V",
     compare_unit = "C",
     commit_details = "K",
-    blame = "b",
+    blame = "B",
     file_history = "L",
     notes_list = "N",
     suggestion = "S",
@@ -152,7 +154,7 @@ require("review").setup({
 ## Keymaps
 
 Navigator headers show the main areas: `[F] Files`, `[Diff]`, `[S] split/unified`, and `[T] Threads`.
-Use `<CR>` select, `N` notes list, `u` copy selected review unit handoff, `?` help, `q` close full review.
+Use `<CR>` select, `s` return to the diff/split, `N` notes list, `u` copy selected review unit handoff, `?` help, `q` close full review.
 
 The left rail shows the active `Scope` explicitly:
 - `all` for the whole branch/range
@@ -203,12 +205,12 @@ Diff viewer:
 | `o`         | cycle file sort                    |
 | `A`         | cycle attention filter (`changed` shows files changed since baseline) |
 | `H`         | hide/show reviewed files           |
-| `B`         | change base ref                    |
+| `<leader>B` | change base ref                    |
 | `M`         | mark before-fix baseline           |
-| `V`         | compare with marked baseline       |
+| `<leader>V` | compare with marked baseline       |
 | `C`         | compare selected/current review units |
 | `K`         | open commit details                |
-| `b`         | open/close blame side panel        |
+| `B`         | open/close blame side panel        |
 | `L`         | open file history popup            |
 | `q`         | close full review                  |
 
@@ -226,6 +228,8 @@ Commands:
 | `:ReviewChangeBase [ref]` | re-diff the active local review against another base |
 | `:ReviewMarkBaseline` | mark current HEAD and file state as the before-fix review baseline |
 | `:ReviewCompareBaseline` | compare current work against the marked baseline |
+| `:ReviewCompare` | open the comparison explorer for branches, tags, commits, files, hunks, and GitButler targets |
+| `:ReviewBack` | return to the review that was open before compare |
 | `:ReviewCompareUnit [idx]` | compare selected/current review unit with another unit |
 | `:ReviewClipboard` | copy local notes, open threads, and discussion items to the clipboard |
 | `:ReviewClipboardLocal` | copy only local draft/staged notes to the clipboard |

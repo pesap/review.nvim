@@ -188,25 +188,25 @@ describe("gitbutler adapter", function()
     assert.are.equal(4, #review_data.files)
     assert.are.equal(3, #review_data.commits)
 
-    local branch_scope = review_data.commits[1]
+    local unassigned = review_data.commits[1]
+    assert.are.equal("unassigned", unassigned.gitbutler.kind)
+    assert.is_true(unassigned.gitbutler.unpublished)
+    assert.are.equal("scratch.lua", unassigned.files[1].path)
+    assert.are.equal("A", unassigned.files[1].status)
+    assert.are.equal(2, #unassigned.files[1].hunks)
+
+    local branch_scope = review_data.commits[2]
     assert.are.equal("feature/gb", branch_scope.gitbutler.branch_name)
     assert.is_true(branch_scope.gitbutler.unpublished)
     assert.are.equal("lua/review.lua", branch_scope.files[1].path)
     assert.are.equal("del", branch_scope.files[1].hunks[1].lines[1].type)
     assert.are.equal("add", branch_scope.files[1].hunks[1].lines[2].type)
 
-    local duplicate_branch_scope = review_data.commits[2]
+    local duplicate_branch_scope = review_data.commits[3]
     assert.are.equal("feature/other", duplicate_branch_scope.gitbutler.branch_name)
     assert.are.equal("lua/review.lua", duplicate_branch_scope.files[1].path)
     assert.are.equal("lua/staged.lua", duplicate_branch_scope.files[2].path)
     assert.is_true(duplicate_branch_scope.files[2].gitbutler.assigned)
-
-    local unassigned = review_data.commits[3]
-    assert.are.equal("unassigned", unassigned.gitbutler.kind)
-    assert.is_true(unassigned.gitbutler.unpublished)
-    assert.are.equal("scratch.lua", unassigned.files[1].path)
-    assert.are.equal("A", unassigned.files[1].status)
-    assert.are.equal(2, #unassigned.files[1].hunks)
   end)
 
   it("builds review files asynchronously", function()
@@ -218,8 +218,8 @@ describe("gitbutler adapter", function()
     assert.is_nil(done.err)
     assert.are.equal(4, #done.review_data.files)
     assert.are.equal(3, #done.review_data.commits)
-    assert.are.equal("feature/gb", done.review_data.commits[1].gitbutler.branch_name)
-    assert.are.equal("unassigned changes", done.review_data.commits[3].message)
+    assert.are.equal("unassigned changes", done.review_data.commits[1].message)
+    assert.are.equal("feature/gb", done.review_data.commits[2].gitbutler.branch_name)
   end)
 
   it("rebuilds scopes when a GitButler branch disappears mid-review", function()
@@ -418,6 +418,6 @@ describe("gitbutler adapter", function()
 
     local review_data = assert(gitbutler.workspace_review())
 
-    assert.are.equal("?", review_data.commits[1].files[1].status)
+    assert.are.equal("?", review_data.commits[2].files[1].status)
   end)
 end)

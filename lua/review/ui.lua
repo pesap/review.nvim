@@ -8,6 +8,7 @@ local M = {}
 
 local get_diff_win
 local review_closing = false
+local review_close_scheduled = false
 local file_line_maps
 local file_stats
 local setup_diff_keymaps
@@ -15,8 +16,14 @@ local choose_note_at
 local navigator_width
 local current_navigator_width
 local truncate_end_text
+local restore_files_cursor
+local scope_cursor_anchor
+local restore_scope_cursor
+local select_active_file_by_path
+local anchor_file_path
 local notes_list_win
 local update_window_chrome
+local render_diff
 local NOTE_STATUS_ORDER = { "unreviewed", "reviewed", "needs-agent", "blocked", "resolved" }
 local FILE_SORT_ORDER = { "path", "risk", "overlap", "notes", "size", "unreviewed" }
 local FILE_ATTENTION_FILTER_ORDER =
@@ -269,15 +276,69 @@ end
 
 ---@param buf number
 local function attach_review_quit_guard(buf)
-  vim.api.nvim_create_autocmd("QuitPre", {
-    buffer = buf,
-    callback = function()
+  local function schedule_close()
+    if review_closing or review_close_scheduled then
+      return
+    end
+    review_close_scheduled = true
+    vim.schedule(function()
+      review_close_scheduled = false
       if review_closing then
         return
       end
-      review_closing = true
+      pcall(M.close)
+    end)
+  end
+
+  vim.api.nvim_create_autocmd("QuitPre", {
+    buffer = buf,
+    callback = function()
+      schedule_close()
+    end,
+  })
+end
+
+---@param win number
+local function attach_review_window_close_guard(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if review_closing or review_close_scheduled then
+        return
+      end
+      local ui_state = state.get_ui()
+      if ui_state and ui_state.split_win == win then
+        if ui_state.suppress_split_close_guard then
+          return
+        end
+        ui_state.view_mode = "unified"
+        ui_state.split_win = nil
+        ui_state.split_buf = nil
+        vim.schedule(function()
+          local current_ui = state.get_ui()
+          if not current_ui or review_closing then
+            return
+          end
+          if current_ui.diff_win and vim.api.nvim_win_is_valid(current_ui.diff_win) then
+            vim.wo[current_ui.diff_win].scrollbind = false
+          end
+          if current_ui.diff_buf and vim.api.nvim_buf_is_valid(current_ui.diff_buf) then
+            render_diff(current_ui.diff_buf)
+          end
+          update_window_chrome()
+        end)
+        return
+      end
+      review_close_scheduled = true
       vim.schedule(function()
-        pcall(M.close)
+        review_close_scheduled = false
+        if not review_closing then
+          pcall(M.close)
+        end
       end)
     end,
   })
@@ -1148,20 +1209,15 @@ local function compact_compare_label(max_width)
     return ""
   end
 
-  local base = session.base_ref or "HEAD"
-  local head = git.current_branch() or "HEAD"
-  local commit = state.current_commit()
+  local base = session.left_ref or session.base_ref or "HEAD"
+  local head = session.right_ref or git.current_branch() or "HEAD"
   if state.is_gitbutler() then
-    base = "GitButler"
-    head = "workspace"
-  end
-  if commit then
-    if commit.gitbutler and commit.gitbutler.kind == "branch" then
-      head = commit.gitbutler.branch_name or commit.message
-    elseif commit.gitbutler and commit.gitbutler.kind == "unassigned" then
-      head = "unassigned"
+    if session.left_ref and session.right_ref then
+      base = session.left_ref
+      head = session.right_ref
     else
-      head = commit.short_sha
+      base = "GitButler"
+      head = "workspace"
     end
   end
 
@@ -1180,39 +1236,133 @@ local function compact_compare_label(max_width)
   return truncate_end_text(variants[#variants], max_width)
 end
 
+---@param text string
+---@param width number
+---@return string
+local function fixed_status_field(text, width)
+  local value = truncate_middle_text(tostring(text or ""), width)
+  local used = vim.fn.strdisplaywidth(value)
+  if used < width then
+    value = value .. string.rep(" ", width - used)
+  end
+  return value
+end
+
+---@param ref string
+---@param max_width number
+---@param prefix string
+---@return string[]
+local function compare_ref_lines(prefix, ref, max_width)
+  ref = tostring(ref or "")
+  local line = prefix .. ref
+  if vim.fn.strdisplaywidth(line) <= max_width then
+    return { line }
+  end
+
+  local lines = {}
+  local continuation = "  "
+  local current = prefix
+  local current_has_token = false
+
+  local function push_current()
+    if current_has_token then
+      table.insert(lines, current)
+    end
+    current = continuation
+    current_has_token = false
+  end
+
+  for token in ref:gmatch("[^/]+/?") do
+    local candidate = current .. token
+    if vim.fn.strdisplaywidth(candidate) <= max_width then
+      current = candidate
+      current_has_token = true
+    else
+      push_current()
+      local continuation_candidate = current .. token
+      if vim.fn.strdisplaywidth(continuation_candidate) <= max_width then
+        current = continuation_candidate
+      else
+        local available = math.max(max_width - vim.fn.strdisplaywidth(current), 1)
+        current = current .. truncate_middle_text(token, available)
+      end
+      current_has_token = true
+    end
+  end
+
+  if current_has_token then
+    table.insert(lines, current)
+  end
+  if #lines == 0 then
+    return { prefix .. truncate_middle_text(ref, math.max(max_width - vim.fn.strdisplaywidth(prefix), 1)) }
+  end
+  return lines
+end
+
+---@param session ReviewSession
+---@param max_width number
+---@return string[]|nil
+local function compare_context_lines(session, max_width)
+  if not session or not session.left_ref or not session.right_ref then
+    return nil
+  end
+  local lines = { " compare" }
+  vim.list_extend(lines, compare_ref_lines("   base ", session.left_ref, max_width))
+  vim.list_extend(lines, compare_ref_lines("   head ", session.right_ref, max_width))
+  return lines
+end
+
+---@param session ReviewSession
+---@param max_width number
+---@return string|nil
+local function compare_scope_context_line(session, max_width)
+  if not session or not session.left_ref or not session.right_ref or not session.commits or #session.commits == 0 then
+    return nil
+  end
+
+  local mode = state.scope_mode()
+  local label = "all files"
+  local commit = state.current_commit()
+  if mode == "select_commit" then
+    label = "pick commit"
+  elseif commit then
+    label = "commit " .. tostring(commit.short_sha or commit.sha or "")
+    if commit.message and commit.message ~= "" then
+      label = label .. " " .. commit.message
+    end
+  end
+  return format_context_line("   scope ", label, max_width)
+end
+
+---@param session ReviewSession
+---@param max_width number
+---@return string|nil
+local function compare_back_context_line(session, max_width)
+  if not session or not session.left_ref or not session.right_ref or not session.previous_review then
+    return nil
+  end
+  return format_context_line("   back  ", ":ReviewBack", max_width)
+end
+
 ---@param max_width number
 ---@return string
 local function compact_active_commit_label(max_width)
+  local mode = state.scope_mode()
   local commit = state.current_commit()
-  local variants
-  if not commit then
-    variants = {
-      state.is_gitbutler() and "GitButler stack" or "Current stack",
-      state.is_gitbutler() and "gb stack" or "stack",
-    }
+  local label
+  if mode == "select_commit" then
+    label = "scope: pick"
+  elseif not commit then
+    label = "scope: all"
   elseif commit.gitbutler and commit.gitbutler.kind == "branch" then
-    variants = {
-      string.format("branch %s", commit.gitbutler.branch_name or commit.message),
-      commit.gitbutler.branch_name or commit.message,
-    }
+    label = "scope: "
+      .. tostring(commit.gitbutler.branch_name or commit.gitbutler.branch_cli_id or commit.short_sha or "branch")
   elseif commit.gitbutler and commit.gitbutler.kind == "unassigned" then
-    variants = {
-      "unassigned changes",
-      "unassigned",
-    }
+    label = "scope: unassigned"
   else
-    variants = {
-      string.format("%s %s", commit.short_sha, commit.message),
-      commit.short_sha,
-    }
+    label = "scope: " .. tostring(commit.short_sha or commit.sha or "commit")
   end
-
-  for _, label in ipairs(variants) do
-    if vim.fn.strdisplaywidth(label) <= max_width then
-      return label
-    end
-  end
-  return truncate_end_text(variants[#variants], max_width)
+  return truncate_middle_text(label, max_width)
 end
 
 ---@param text string
@@ -1261,12 +1411,12 @@ end
 ---@return string
 local function build_diff_statusline(file, width)
   local additions, deletions = file_stats(file)
-  local compare_budget = math.max(math.floor(width * 0.28), 12)
-  local commit_budget = math.max(math.floor(width * 0.18), 8)
-  local compare_label = compact_compare_label(compare_budget)
-  local commit_label = compact_active_commit_label(commit_budget)
-  local loading_suffix = (state.comments_loading() or state.local_refresh_loading()) and "  •  sync" or ""
-  local right_text = compare_label .. "  •  " .. commit_label .. loading_suffix
+  local compare_budget = math.min(math.max(math.floor(width * 0.28), 14), 30)
+  local scope_budget = math.min(math.max(math.floor(width * 0.16), 14), 18)
+  local compare_label = fixed_status_field(compact_compare_label(compare_budget), compare_budget)
+  local scope_label = fixed_status_field(compact_active_commit_label(scope_budget), scope_budget)
+  local sync_label = (state.comments_loading() or state.local_refresh_loading()) and "sync" or "    "
+  local right_text = statusline_escape(compare_label .. "  " .. scope_label .. "  " .. sync_label)
   local right_width = vim.fn.strdisplaywidth(right_text)
   local counts_width = vim.fn.strdisplaywidth(" +" .. additions .. " -" .. deletions .. " ")
   local left_budget = math.max(width - right_width - counts_width - 6, 12)
@@ -1279,12 +1429,12 @@ local function build_diff_statusline(file, width)
     path_label,
     "  ",
     "%#",
-    HL.status_a,
+    HL.status_a_dim,
     "#+",
     tostring(additions),
     " ",
     "%#",
-    HL.status_d,
+    HL.status_d_dim,
     "#-",
     tostring(deletions),
     " ",
@@ -1294,6 +1444,48 @@ local function build_diff_statusline(file, width)
     right_text,
     " ",
   })
+end
+
+---@return number
+local function review_statusline_width()
+  local ui_state = state.get_ui()
+  if not ui_state then
+    return vim.o.columns
+  end
+
+  -- With laststatus=3 Neovim draws one global statusline, but it evaluates the
+  -- statusline from the active window. Build it against the review layout width
+  -- instead of whichever split currently has focus.
+  local wins = {
+    ui_state.files_win or ui_state.explorer_win,
+    ui_state.threads_win,
+    ui_state.diff_win,
+    ui_state.split_win,
+  }
+  local leftmost
+  local rightmost
+  for _, win in ipairs(wins) do
+    if win and vim.api.nvim_win_is_valid(win) then
+      local pos = vim.api.nvim_win_get_position(win)
+      local col = pos[2]
+      local width = vim.api.nvim_win_get_width(win)
+      leftmost = leftmost and math.min(leftmost, col) or col
+      rightmost = rightmost and math.max(rightmost, col + width) or (col + width)
+    end
+  end
+  if leftmost and rightmost and rightmost > leftmost then
+    return rightmost - leftmost
+  end
+  return vim.o.columns
+end
+
+---@param file ReviewFile|nil
+---@return string
+local function build_review_statusline(file)
+  if not file then
+    return "%#" .. HL.panel_meta .. "# review "
+  end
+  return build_diff_statusline(file, review_statusline_width())
 end
 
 navigator_width = function()
@@ -1440,6 +1632,12 @@ local function active_scope_label()
     return "select · " .. detail
   end
   return "current · " .. detail
+end
+
+---@param session ReviewSession|nil
+---@return boolean
+local function is_compare_session(session)
+  return session ~= nil and session.left_ref ~= nil and session.right_ref ~= nil
 end
 
 ---@return table[]
@@ -1730,7 +1928,7 @@ local function build_thread_sections(active_files)
   end
 
   local vendor_rows = {}
-  local local_rows = {}
+  local local_rows_by_label = {}
   for path, entry in pairs(by_path) do
     if #entry.vendor_notes > 0 then
       table.insert(vendor_rows, {
@@ -1744,9 +1942,11 @@ local function build_thread_sections(active_files)
       })
     end
     if #entry.local_notes > 0 then
-      table.insert(local_rows, {
+      local local_label = entry.local_notes[1] and entry.local_notes[1].comparison_key and "local/compare" or "local/"
+      local_rows_by_label[local_label] = local_rows_by_label[local_label] or {}
+      table.insert(local_rows_by_label[local_label], {
         source = "local",
-        label = "local/",
+        label = local_label,
         path = path,
         idx = entry.idx,
         count = #entry.local_notes,
@@ -1767,14 +1967,19 @@ local function build_thread_sections(active_files)
   end
 
   sort_rows(vendor_rows)
-  sort_rows(local_rows)
+  for _, rows in pairs(local_rows_by_label) do
+    sort_rows(rows)
+  end
 
   local sections = {}
   if #vendor_rows > 0 then
     table.insert(sections, { label = vendor_label, rows = vendor_rows })
   end
-  if #local_rows > 0 then
-    table.insert(sections, { label = "local/", rows = local_rows })
+  for _, label in ipairs({ "local/compare", "local/" }) do
+    local rows = local_rows_by_label[label] or {}
+    if #rows > 0 then
+      table.insert(sections, { label = label, rows = rows })
+    end
   end
   return sections
 end
@@ -1791,7 +1996,7 @@ local function build_stale_sections()
   local grouped = {}
 
   for _, note in ipairs(stale_notes) do
-    local source = note.status == "remote" and vendor_label or "local/"
+    local source = note.status == "remote" and vendor_label or note.comparison_key and "local/compare" or "local/"
     local path = note.file_path or "(discussion)"
     local key = source .. "::" .. path
     local entry = grouped[key]
@@ -1885,6 +2090,8 @@ local function jump_to_file_location(file_path, line, side)
   end
 end
 
+M.jump_to_file_location = jump_to_file_location
+
 ---@return number|nil
 local function navigator_selection_line()
   local s = state.get()
@@ -1943,6 +2150,11 @@ function M.focus_section(section)
     return
   end
 
+  local current = vim.api.nvim_get_current_win()
+  if current == ui_state.diff_win or current == ui_state.split_win then
+    ui_state.last_diff_win = current
+  end
+
   local line_nr
   if section == "files" then
     local current_line = vim.api.nvim_win_get_cursor(target_win)[1]
@@ -1967,7 +2179,7 @@ function M.focus_diff()
     return
   end
   local current = vim.api.nvim_get_current_win()
-  local target = ui_state.diff_win
+  local target = ui_state.last_diff_win or ui_state.diff_win
   if
     ui_state.view_mode == "split"
     and ui_state.split_win
@@ -2048,33 +2260,33 @@ update_window_chrome = function()
   end
 
   local file = current_display_file()
+  local review_statusline = build_review_statusline(file)
 
   if ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win) then
     vim.wo[ui_state.explorer_win].winbar = ""
-    vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = ui_state.explorer_win })
+    vim.api.nvim_set_option_value("statusline", review_statusline, { scope = "local", win = ui_state.explorer_win })
   end
   if ui_state.threads_win and vim.api.nvim_win_is_valid(ui_state.threads_win) then
     vim.wo[ui_state.threads_win].winbar = ""
-    vim.api.nvim_set_option_value("statusline", " ", { scope = "local", win = ui_state.threads_win })
+    vim.api.nvim_set_option_value("statusline", review_statusline, { scope = "local", win = ui_state.threads_win })
   end
 
   if ui_state.diff_win and vim.api.nvim_win_is_valid(ui_state.diff_win) then
     if file then
       vim.wo[ui_state.diff_win].winbar = build_diff_winbar(file, ui_state.view_mode == "split" and "old" or nil)
-      vim.wo[ui_state.diff_win].statusline = build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.diff_win))
+      vim.wo[ui_state.diff_win].statusline = review_statusline
     else
       vim.wo[ui_state.diff_win].winbar = ""
-      vim.wo[ui_state.diff_win].statusline = ""
+      vim.wo[ui_state.diff_win].statusline = review_statusline
     end
   end
   if ui_state.split_win and vim.api.nvim_win_is_valid(ui_state.split_win) then
     if file then
       vim.wo[ui_state.split_win].winbar = build_diff_winbar(file, "new")
-      vim.wo[ui_state.split_win].statusline =
-        build_diff_statusline(file, vim.api.nvim_win_get_width(ui_state.split_win))
+      vim.wo[ui_state.split_win].statusline = review_statusline
     else
       vim.wo[ui_state.split_win].winbar = ""
-      vim.wo[ui_state.split_win].statusline = ""
+      vim.wo[ui_state.split_win].statusline = review_statusline
     end
   end
 end
@@ -2211,6 +2423,10 @@ local function render_files_pane(buf)
   local explorer_width = current_navigator_width()
   local branch_line, base_line = navigator_context_lines()
   local worktree_line = worktree_context_line(s, math.max(explorer_width - 1, 8))
+  local compare_lines = compare_context_lines(s, math.max(explorer_width - 1, 8))
+  local compare_scope_line = compare_scope_context_line(s, math.max(explorer_width - 1, 8))
+  local compare_back_line = compare_back_context_line(s, math.max(explorer_width - 1, 8))
+  local stale_reason = state.remote_context_stale_reason()
   local header_indent = " "
   local file_indent = "  "
   local scope_indent = "  "
@@ -2490,33 +2706,58 @@ local function render_files_pane(buf)
     end
     for _, name in ipairs(root.dir_order) do
       local child = root.dirs[name]
-      render_dir(child, header_indent, name .. "/")
+      render_dir(child, file_indent, name .. "/")
     end
   end
 
-  table.insert(lines, branch_line)
-  table.insert(files_line_map, { type = "header", section = "context" })
-  table.insert(highlights, { line = #lines - 1, hl = HL.explorer_active, col_start = 1, col_end = -1 })
-  if base_line then
+  local show_scope_picker = state.scope_mode() == "select_commit"
+  local show_context = compare_lines ~= nil or show_scope_picker or (state.scope_mode() ~= "all") or stale_reason ~= nil
+
+  if compare_lines then
+    for idx, line in ipairs(compare_lines) do
+      table.insert(lines, truncate_end_text(line, math.max(explorer_width - 1, 8)))
+      table.insert(files_line_map, { type = "header", section = "context" })
+      table.insert(highlights, {
+        line = #lines - 1,
+        hl = idx == 1 and HL.explorer_active or HL.panel_meta,
+        col_start = 1,
+        col_end = -1,
+      })
+    end
+    if compare_scope_line then
+      table.insert(lines, compare_scope_line)
+      table.insert(files_line_map, { type = "header", section = "context" })
+      table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
+    end
+    if compare_back_line then
+      table.insert(lines, compare_back_line)
+      table.insert(files_line_map, { type = "header", section = "context" })
+      table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
+    end
+  elseif show_context then
+    table.insert(lines, branch_line)
+    table.insert(files_line_map, { type = "header", section = "context" })
+    table.insert(highlights, { line = #lines - 1, hl = HL.explorer_active, col_start = 1, col_end = -1 })
+  end
+  if show_scope_picker and base_line and not state.is_gitbutler() then
     table.insert(lines, base_line)
     table.insert(files_line_map, { type = "header", section = "context" })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = 9 })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 9, col_end = -1 })
   end
-  if worktree_line then
+  if show_context and worktree_line then
     table.insert(lines, worktree_line)
     table.insert(files_line_map, { type = "header", section = "context" })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = 8 })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 8, col_end = -1 })
   end
-  if s.merge_base_ref then
+  if show_scope_picker and s.merge_base_ref then
     local merge_line = format_context_line(" merge  ", s.merge_base_ref:sub(1, 12), math.max(explorer_width - 1, 8))
     table.insert(lines, merge_line)
     table.insert(files_line_map, { type = "header", section = "context" })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = 8 })
     table.insert(highlights, { line = #lines - 1, hl = HL.panel_title, col_start = 8, col_end = -1 })
   end
-  local stale_reason = state.remote_context_stale_reason()
   if stale_reason then
     local stale_line = format_context_line(" stale  ", stale_reason, math.max(explorer_width - 1, 8))
     table.insert(lines, stale_line)
@@ -2524,70 +2765,63 @@ local function render_files_pane(buf)
     table.insert(highlights, { line = #lines - 1, hl = HL.note_separator, col_start = 1, col_end = -1 })
   end
 
-  local scope_prefix = header_indent .. "Scope  "
-  local scope_value =
-    truncate_end_text(active_scope_label(), math.max(explorer_width - vim.fn.strdisplaywidth(scope_prefix), 8))
-  local scope_line = scope_prefix .. scope_value
-  table.insert(lines, scope_line)
-  table.insert(files_line_map, { type = "header", section = "scope" })
-  table.insert(highlights, { line = #lines - 1, hl = HL.explorer_scope, col_start = 1, col_end = #scope_prefix })
-  table.insert(highlights, { line = #lines - 1, hl = HL.explorer_scope_value, col_start = #scope_prefix, col_end = -1 })
+  if show_scope_picker then
+    local scope_prefix = header_indent .. "Scope  "
+    local scope_value =
+      truncate_end_text(active_scope_label(), math.max(explorer_width - vim.fn.strdisplaywidth(scope_prefix), 8))
+    local scope_line = scope_prefix .. scope_value
+    table.insert(lines, scope_line)
+    table.insert(files_line_map, { type = "header", section = "scope" })
+    table.insert(highlights, { line = #lines - 1, hl = HL.explorer_scope, col_start = 1, col_end = #scope_prefix })
+    table.insert(
+      highlights,
+      { line = #lines - 1, hl = HL.explorer_scope_value, col_start = #scope_prefix, col_end = -1 }
+    )
 
-  local km = require("review").config.keymaps
-  local scope_hint = string.format(
-    "%s%s scope  %s cmp  %s base",
-    header_indent,
-    km.toggle_stack or "<Tab>",
-    km.compare_unit or "C",
-    km.change_base or "B"
-  )
-  table.insert(lines, truncate_end_text(scope_hint, math.max(explorer_width - 1, 8)))
-  table.insert(files_line_map, { type = "header", section = "scope" })
-  table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
-
-  for _, row in ipairs(scope_picker_rows()) do
-    local unit_status = state.get_unit_review_status(row.unit_id)
-    local unit_mark = review_status_mark(unit_status)
-    local total = #(row.files or {})
-    local reviewed = reviewed_file_count(row.files or {})
-    local note_count = unit_visible_note_count(row.files or {})
-    local progress = total > 0 and string.format("%d/%d", reviewed, total) or ""
-    local meta = row.loading and string.format("%s loading", row.source or "unit")
-      or string.format("%s f%d", row.source or "unit", total)
-    if note_count > 0 and not row.loading then
-      meta = meta .. string.format(" (%d)", note_count)
-    end
-    local suffix = progress ~= "" and (progress .. " " .. meta) or meta
-    local label_budget =
-      math.max(explorer_width - vim.fn.strdisplaywidth(scope_indent) - vim.fn.strdisplaywidth(suffix) - 4, 8)
-    local is_active = (row.type == "scope_all" and state.scope_mode() == "all")
-      or (row.type == "commit" and s.current_commit_idx == row.idx)
-    local left = string.format("%s%s %s", scope_indent, unit_mark, truncate_end_text(row.label, label_budget))
-    local gap = math.max(explorer_width - vim.fn.strdisplaywidth(left) - vim.fn.strdisplaywidth(suffix), 1)
-    local line = left .. string.rep(" ", gap) .. suffix
-    table.insert(lines, line)
-    table.insert(files_line_map, {
-      type = row.type,
-      idx = row.idx,
-      commit = row.commit,
-      unit_id = row.unit_id,
-      section = "scope",
-    })
-    local li = #lines - 1
-    if is_active then
+    for _, row in ipairs(scope_picker_rows()) do
+      local unit_status = state.get_unit_review_status(row.unit_id)
+      local unit_mark = review_status_mark(unit_status)
+      local total = #(row.files or {})
+      local reviewed = reviewed_file_count(row.files or {})
+      local note_count = unit_visible_note_count(row.files or {})
+      local progress = total > 0 and string.format("%d/%d", reviewed, total) or ""
+      local meta = row.loading and string.format("%s loading", row.source or "unit")
+        or string.format("%s f%d", row.source or "unit", total)
+      if note_count > 0 and not row.loading then
+        meta = meta .. string.format(" (%d)", note_count)
+      end
+      local suffix = progress ~= "" and (progress .. " " .. meta) or meta
+      local label_budget =
+        math.max(explorer_width - vim.fn.strdisplaywidth(scope_indent) - vim.fn.strdisplaywidth(suffix) - 4, 8)
+      local is_active = (row.type == "scope_all" and state.scope_mode() == "all")
+        or (row.type == "commit" and s.current_commit_idx == row.idx)
+      local left = string.format("%s%s %s", scope_indent, unit_mark, truncate_end_text(row.label, label_budget))
+      local gap = math.max(explorer_width - vim.fn.strdisplaywidth(left) - vim.fn.strdisplaywidth(suffix), 1)
+      local line = left .. string.rep(" ", gap) .. suffix
+      table.insert(lines, line)
+      table.insert(files_line_map, {
+        type = row.type,
+        idx = row.idx,
+        commit = row.commit,
+        unit_id = row.unit_id,
+        section = "scope",
+      })
+      local li = #lines - 1
+      if is_active then
+        table.insert(highlights, {
+          line = li,
+          hl = HL.explorer_active_row,
+          col_start = 0,
+          col_end = -1,
+        })
+      end
       table.insert(highlights, {
         line = li,
-        hl = HL.explorer_active_row,
-        col_start = 0,
+        hl = is_active and HL.explorer_active or HL.panel_meta,
+        col_start = 2,
         col_end = -1,
       })
     end
-    table.insert(highlights, {
-      line = li,
-      hl = is_active and HL.explorer_active or HL.panel_meta,
-      col_start = 2,
-      col_end = -1,
-    })
   end
 
   local filter_bits = {}
@@ -2713,29 +2947,25 @@ local function render_threads_pane(buf)
   local active_files = state.active_files()
   local ui_state = state.get_ui()
   if ui_state then
-    ui_state.thread_filter = ui_state.thread_filter or "all"
+    ui_state.thread_filter = ui_state.thread_filter or "open"
     ui_state.collapsed_thread_groups = ui_state.collapsed_thread_groups or {}
     ui_state.expanded_thread_files = ui_state.expanded_thread_files or {}
   end
-  local filter = ui_state and ui_state.thread_filter or "all"
-  local filters = {
-    { id = "all", label = "all" },
-    { id = "open", label = "open" },
-    { id = "resolved", label = "done" },
-    { id = "stale", label = "stale" },
-  }
+  local filter = ui_state and ui_state.thread_filter or "open"
+  local render_status_filter = nil
 
   local function note_matches_filter(note, stale_section)
-    if filter == "all" then
+    local active_filter = render_status_filter or filter
+    if active_filter == "all" then
       return true
     end
-    if filter == "stale" then
+    if active_filter == "stale" then
       return stale_section or thread_status(note) == "stale"
     end
     if stale_section then
       return false
     end
-    return thread_status(note) == filter
+    return thread_status(note) == active_filter
   end
 
   local function filtered_notes(notes, stale_section)
@@ -2769,32 +2999,28 @@ local function render_threads_pane(buf)
       end
     end
   end
+  local filtered_thread_count = open_count
+  if filter == "resolved" then
+    filtered_thread_count = resolved_count
+  elseif filter == "stale" then
+    filtered_thread_count = stale_count
+  elseif filter == "all" then
+    filtered_thread_count = open_count + resolved_count + stale_count
+  end
 
   local header_width = math.max(explorer_width, 12)
-  local header_variants = {
-    string.format(" [T] Threads  %d open · %d done · %d stale", open_count, resolved_count, stale_count),
-    string.format(" [T] Threads  %d open %d done %d stale", open_count, resolved_count, stale_count),
-    string.format(" [T] Threads o%d d%d s%d", open_count, resolved_count, stale_count),
-    string.format(" [T] Thrd o%d d%d s%d", open_count, resolved_count, stale_count),
-    string.format(" [T] %d/%d/%d", open_count, resolved_count, stale_count),
-  }
-  local header = header_variants[#header_variants]
-  for _, variant in ipairs(header_variants) do
-    if vim.fn.strdisplaywidth(variant) <= header_width then
-      header = variant
-      break
-    end
-  end
-  table.insert(lines, truncate_end_text(header, header_width))
+  table.insert(lines, truncate_end_text(" [T] Threads", header_width))
   table.insert(threads_line_map, { type = "header", section = "threads" })
   table.insert(highlights, { line = #lines - 1, hl = HL.threads_header, col_start = 1, col_end = -1 })
 
-  local filter_line = " "
-  for _, item in ipairs(filters) do
-    filter_line = filter_line .. (item.id == filter and "[" .. item.label .. "] " or item.label .. " ")
-  end
-  table.insert(lines, truncate_end_text(filter_line:gsub("%s+$", ""), math.max(explorer_width - 1, 12)))
+  local filter_line = " filter:" .. filter
+  table.insert(lines, truncate_end_text(filter_line, math.max(explorer_width - 1, 12)))
   table.insert(threads_line_map, { type = "filter", section = "threads" })
+  table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
+
+  local count_label = filtered_thread_count == 1 and "thread" or "threads"
+  table.insert(lines, string.format(" %d %s", filtered_thread_count, count_label))
+  table.insert(threads_line_map, { type = "summary", section = "threads" })
   table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
 
   local function actor_suffix(entry)
@@ -2834,7 +3060,13 @@ local function render_threads_pane(buf)
 
   local rendered_thread_count = 0
 
-  local function add_thread_sections(section_name, sections, row_type)
+  local function add_status_header(label)
+    table.insert(lines, " " .. label)
+    table.insert(threads_line_map, { type = "header", section = label:lower() })
+    table.insert(highlights, { line = #lines - 1, hl = HL.panel_meta, col_start = 1, col_end = -1 })
+  end
+
+  local function add_thread_sections(section_name, sections, row_type, stale_section)
     if #sections == 0 then
       return
     end
@@ -2842,7 +3074,7 @@ local function render_threads_pane(buf)
     for _, section in ipairs(sections) do
       local rendered_rows = {}
       for _, row in ipairs(section.rows) do
-        local notes = filtered_notes(row.notes or { row.note }, section_name == "stale")
+        local notes = filtered_notes(row.notes or { row.note }, stale_section == true)
         if #notes > 0 then
           local copy = vim.deepcopy(row)
           copy.notes = notes
@@ -3009,8 +3241,30 @@ local function render_threads_pane(buf)
     end
   end
 
-  add_thread_sections("threads", build_thread_sections(active_files), "thread")
-  add_thread_sections("stale", build_stale_sections(), "stale")
+  if filter == "all" then
+    render_status_filter = "open"
+    if open_count > 0 then
+      add_status_header("Open")
+    end
+    add_thread_sections("open", build_thread_sections(active_files), "thread")
+    render_status_filter = "resolved"
+    if resolved_count > 0 then
+      add_status_header("Resolved")
+    end
+    add_thread_sections("resolved", build_thread_sections(active_files), "thread")
+    render_status_filter = "stale"
+    if stale_count > 0 then
+      add_status_header("Stale")
+    end
+    add_thread_sections("stale", build_thread_sections(active_files), "thread")
+    add_thread_sections("stale", build_stale_sections(), "stale", true)
+    render_status_filter = nil
+  elseif filter == "stale" then
+    add_thread_sections("stale", build_thread_sections(active_files), "thread")
+    add_thread_sections("stale", build_stale_sections(), "stale", true)
+  else
+    add_thread_sections("threads", build_thread_sections(active_files), "thread")
+  end
 
   if rendered_thread_count == 0 then
     table.insert(lines, "  (no threads)")
@@ -3046,6 +3300,44 @@ local function format_diff_line(dl, number_width)
   local new_num = format_line_number(dl.new_lnum, number_width)
   local gutter = string.format("%s %s│%s│", old_num, new_num, prefix)
   return gutter .. dl.text, #gutter
+end
+
+---@param line string|nil
+---@return number
+local function diff_code_col(line)
+  if not line or line == "" then
+    return 0
+  end
+  local _, gutter_end = line:find("│.│")
+  if not gutter_end then
+    _, gutter_end = line:find("|.|")
+  end
+  return gutter_end or 0
+end
+
+---@param line string|nil
+---@return string
+local function strip_diff_gutter(line)
+  line = line or ""
+  local code = line:match("^%s*%d*%s+%d*│.│(.*)$")
+    or line:match("^%s*%d*│.│(.*)$")
+    or line:match("^%s*%d*%s+%d*|.|(.*)$")
+    or line:match("^%s*%d*|.|(.*)$")
+  return code or line
+end
+
+---@param win number|nil
+local function clamp_diff_cursor_to_code(win)
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local buf = vim.api.nvim_win_get_buf(win)
+  local line = vim.api.nvim_buf_get_lines(buf, cursor[1] - 1, cursor[1], false)[1]
+  local min_col = diff_code_col(line)
+  if cursor[2] < min_col then
+    vim.api.nvim_win_set_cursor(win, { cursor[1], min_col })
+  end
 end
 
 --- Build display lines and highlights for a file's diff.
@@ -3131,7 +3423,7 @@ end
 
 --- Render the diff viewer buffer for the current file.
 ---@param buf number
-local function render_diff(buf)
+render_diff = function(buf)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
@@ -3535,6 +3827,25 @@ local function render_split(ui_state)
   vim.cmd("syncbind")
 end
 
+local function place_split_cursor(ui_state)
+  if
+    not ui_state
+    or not ui_state.split_win
+    or not ui_state.split_buf
+    or not vim.api.nvim_win_is_valid(ui_state.split_win)
+    or not vim.api.nvim_buf_is_valid(ui_state.split_buf)
+  then
+    return
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(ui_state.split_buf)
+  if line_count < 1 then
+    return
+  end
+
+  vim.api.nvim_win_set_cursor(ui_state.split_win, { math.min(3, line_count), 0 })
+end
+
 --- Toggle between unified and split view.
 function M.toggle_split()
   local ui_state = state.get_ui()
@@ -3581,8 +3892,10 @@ function M.toggle_split()
 
     setup_diff_keymaps(split_buf)
     attach_review_quit_guard(split_buf)
+    attach_review_window_close_guard(split_win)
 
     render_split(ui_state)
+    place_split_cursor(ui_state)
     update_window_chrome()
     if ui_state.explorer_win and vim.api.nvim_win_is_valid(ui_state.explorer_win) then
       vim.wo[ui_state.explorer_win].winfixwidth = false
@@ -3601,7 +3914,9 @@ function M.toggle_split()
     end
 
     if ui_state.split_win and vim.api.nvim_win_is_valid(ui_state.split_win) then
-      vim.api.nvim_win_close(ui_state.split_win, true)
+      ui_state.suppress_split_close_guard = true
+      pcall(vim.api.nvim_win_close, ui_state.split_win, true)
+      ui_state.suppress_split_close_guard = false
     end
     ui_state.split_buf = nil
     ui_state.split_win = nil
@@ -3649,6 +3964,10 @@ function M.open_unit_compare(idx)
   require("review.ui.context").open_unit_compare(idx)
 end
 
+function M.open_compare_explorer()
+  require("review.compare").open()
+end
+
 --- Select a commit (nil = all changes) and refresh the view.
 ---@param idx number|nil  Commit index, or nil for all changes
 ---@param opts table|nil
@@ -3674,6 +3993,7 @@ function M.select_commit(idx, opts)
         else
           state.set_scope_mode("current_commit")
         end
+        select_active_file_by_path(opts.focus_file_path)
         vim.notify("Loading commit diff...", vim.log.levels.INFO)
         if state.get_ui() then
           M.refresh()
@@ -3712,6 +4032,7 @@ function M.select_commit(idx, opts)
   else
     state.set_scope_mode("current_commit")
   end
+  select_active_file_by_path(opts.focus_file_path)
 
   if state.get_ui() then
     M.refresh()
@@ -3729,30 +4050,48 @@ function M.toggle_stack_view()
     return
   end
 
+  local anchor = scope_cursor_anchor()
+  local focus_file_path = anchor_file_path(anchor)
   local mode = state.scope_mode()
-  if state.is_gitbutler() then
-    local next_idx = mode == "all" and 1 or ((s.current_commit_idx or 0) + 1)
-    if next_idx > #s.commits then
-      M.select_commit(nil)
+  if is_compare_session(s) then
+    if mode == "select_commit" then
+      M.select_commit(nil, { focus_file_path = focus_file_path })
     else
-      M.select_commit(next_idx, { scope_mode = "current_commit" })
+      state.set_scope_mode("select_commit", { keep_all_files = true })
+      select_active_file_by_path(focus_file_path)
+      M.refresh()
     end
+    restore_scope_cursor(anchor)
+    return
+  end
+  if state.is_gitbutler() then
+    local next_idx = (s.current_commit_idx or 0) + 1
+    if s.current_commit_idx and next_idx > #s.commits then
+      M.select_commit(nil, { focus_file_path = focus_file_path })
+    elseif s.commits[next_idx] then
+      M.select_commit(next_idx, { scope_mode = "current_commit", focus_file_path = focus_file_path })
+    else
+      M.select_commit(nil, { focus_file_path = focus_file_path })
+    end
+    restore_scope_cursor(anchor)
     return
   end
 
   if mode == "all" then
-    M.select_commit(s.current_commit_idx or 1, { scope_mode = "current_commit" })
+    M.select_commit(s.current_commit_idx or 1, { scope_mode = "current_commit", focus_file_path = focus_file_path })
+    restore_scope_cursor(anchor)
     return
   end
 
   if mode == "current_commit" then
     state.set_scope_mode("select_commit")
     M.refresh()
-    M.focus_section("scope")
+    restore_scope_cursor(anchor)
     return
   end
 
-  M.select_commit(nil)
+  M.select_commit(nil, { focus_file_path = focus_file_path })
+  restore_scope_cursor(anchor)
 end
 
 function M.refresh_session()
@@ -3871,12 +4210,14 @@ function M.toggle_dir_under_cursor()
   if not entry or entry.type ~= "dir" or not entry.dir_key then
     return
   end
+  local restore_ref = { type = "dir", dir_key = entry.dir_key }
   ui_state.collapsed_dirs = ui_state.collapsed_dirs or {}
   ui_state.collapsed_dirs[entry.dir_key] = not ui_state.collapsed_dirs[entry.dir_key]
   M.refresh()
+  restore_files_cursor(restore_ref)
 end
 
-local function restore_files_cursor(ref)
+restore_files_cursor = function(ref, col)
   if not ref or not files_line_map then
     return
   end
@@ -3891,11 +4232,137 @@ local function restore_files_cursor(ref)
       matches = entry.type == "file" and entry.file_path == ref.file_path
     elseif ref.type == "unit" then
       matches = (entry.type == "commit" or entry.type == "scope_all") and entry.unit_id == ref.unit_id
+    elseif ref.type == "dir" then
+      matches = entry.type == "dir" and entry.dir_key == ref.dir_key
     end
     if matches then
-      vim.api.nvim_win_set_cursor(win, { line_nr, 0 })
+      vim.api.nvim_win_set_cursor(win, { line_nr, math.max(col or 0, 0) })
       return
     end
+  end
+end
+
+local function restore_cursor_line(win, line_nr)
+  if not win or not vim.api.nvim_win_is_valid(win) or not line_nr then
+    return
+  end
+  local buf = vim.api.nvim_win_get_buf(win)
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  vim.api.nvim_win_set_cursor(win, { math.min(math.max(line_nr, 1), line_count), 0 })
+end
+
+---@param file_path string|nil
+---@return boolean
+select_active_file_by_path = function(file_path)
+  if not file_path or file_path == "" then
+    return false
+  end
+  local s = state.get()
+  if not s then
+    return false
+  end
+  for idx, file in ipairs(state.active_files()) do
+    if file.path == file_path then
+      s.current_file_idx = idx
+      return true
+    end
+  end
+  return false
+end
+
+---@param anchor table|nil
+---@return string|nil
+anchor_file_path = function(anchor)
+  if anchor and anchor.ref and anchor.ref.type == "file" then
+    return anchor.ref.file_path
+  end
+  return nil
+end
+
+scope_cursor_anchor = function()
+  local ui_state = state.get_ui()
+  if not ui_state then
+    return nil
+  end
+  local current_win = vim.api.nvim_get_current_win()
+  if current_win == ui_state.diff_win or current_win == ui_state.split_win then
+    return { kind = "win", win = current_win }
+  end
+  if current_win == ui_state.threads_win then
+    return { kind = "threads", line = vim.api.nvim_win_get_cursor(current_win)[1] }
+  end
+  local files_win = ui_state.files_win or ui_state.explorer_win
+  if current_win == files_win then
+    local cursor = vim.api.nvim_win_get_cursor(current_win)
+    local entry = files_line_map and files_line_map[cursor[1]]
+    local anchor = {
+      kind = "files",
+      line = cursor[1],
+      col = cursor[2],
+      view = vim.fn.winsaveview(),
+    }
+    if entry and entry.type == "file" and entry.file_path then
+      anchor.ref = { type = "file", file_path = entry.file_path }
+      return anchor
+    end
+    if entry and (entry.type == "commit" or entry.type == "scope_all") and entry.unit_id then
+      anchor.ref = { type = "unit", unit_id = entry.unit_id }
+      return anchor
+    end
+    if entry and entry.type == "dir" and entry.dir_key then
+      anchor.ref = { type = "dir", dir_key = entry.dir_key }
+      return anchor
+    end
+    return anchor
+  end
+  return nil
+end
+
+restore_scope_cursor = function(anchor)
+  local ui_state = state.get_ui()
+  if not ui_state or not anchor then
+    return
+  end
+  if anchor.kind == "win" then
+    if anchor.win and vim.api.nvim_win_is_valid(anchor.win) then
+      vim.api.nvim_set_current_win(anchor.win)
+    end
+    return
+  end
+  if anchor.kind == "threads" then
+    restore_cursor_line(ui_state.threads_win, anchor.line)
+    if ui_state.threads_win and vim.api.nvim_win_is_valid(ui_state.threads_win) then
+      vim.api.nvim_set_current_win(ui_state.threads_win)
+    end
+    return
+  end
+  local files_win = ui_state.files_win or ui_state.explorer_win
+  if files_win and vim.api.nvim_win_is_valid(files_win) then
+    local restored_ref = false
+    if anchor.ref then
+      restore_files_cursor(anchor.ref, anchor.col)
+      local cursor = vim.api.nvim_win_get_cursor(files_win)
+      local entry = files_line_map and files_line_map[cursor[1]]
+      restored_ref = entry ~= nil
+        and (
+          (anchor.ref.type == "file" and entry.type == "file" and entry.file_path == anchor.ref.file_path)
+          or (anchor.ref.type == "unit" and (entry.type == "commit" or entry.type == "scope_all") and entry.unit_id == anchor.ref.unit_id)
+          or (anchor.ref.type == "dir" and entry.type == "dir" and entry.dir_key == anchor.ref.dir_key)
+        )
+    end
+    if not restored_ref then
+      vim.api.nvim_win_call(files_win, function()
+        restore_cursor_line(files_win, anchor.line)
+        if anchor.view then
+          pcall(vim.fn.winrestview, anchor.view)
+        end
+      end)
+    end
+  elseif anchor.ref then
+    restore_files_cursor(anchor.ref)
+  end
+  if files_win and vim.api.nvim_win_is_valid(files_win) then
+    vim.api.nvim_set_current_win(files_win)
   end
 end
 
@@ -3926,16 +4393,10 @@ function M.cycle_file_review_status_under_cursor()
   else
     return
   end
-  local next_status = NOTE_STATUS_ORDER[1]
-  for idx, status in ipairs(NOTE_STATUS_ORDER) do
-    if status == current then
-      next_status = NOTE_STATUS_ORDER[(idx % #NOTE_STATUS_ORDER) + 1]
-      break
-    end
-  end
+  local next_status = current == "reviewed" and "unreviewed" or "reviewed"
   apply(next_status)
   M.refresh()
-  restore_files_cursor(restore_ref)
+  restore_files_cursor(restore_ref, cursor[2])
 end
 
 function M.search_files_prompt()
@@ -3964,23 +4425,36 @@ function M.clear_file_search()
   M.refresh()
 end
 
-function M.cycle_thread_filter()
+---@param direction number|nil
+function M.cycle_thread_filter(direction)
   local ui_state = state.get_ui()
   if not ui_state then
     return
   end
-  local order = { "all", "open", "resolved", "stale" }
-  ui_state.thread_filter = ui_state.thread_filter or "all"
+  direction = direction or 1
+  local order = { "open", "resolved", "stale", "all" }
+  ui_state.thread_filter = ui_state.thread_filter or "open"
   local next_filter = order[1]
   for idx, value in ipairs(order) do
     if value == ui_state.thread_filter then
-      next_filter = order[(idx % #order) + 1]
+      next_filter = order[((idx - 1 + direction) % #order) + 1]
       break
     end
   end
   ui_state.thread_filter = next_filter
   state.update_ui_prefs({ thread_filter = ui_state.thread_filter })
   M.refresh()
+end
+
+---@param direction number
+function M.handle_threads_tab(direction)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local entry = threads_line_map and threads_line_map[cursor[1]]
+  if entry and entry.type == "filter" then
+    M.cycle_thread_filter(direction)
+    return
+  end
+  M.cycle_thread_cursor(direction)
 end
 
 function M.toggle_thread_row_under_cursor()
@@ -4009,6 +4483,51 @@ function M.toggle_thread_row_under_cursor()
     ui_state.expanded_thread_files[entry.expanded_key] = not ui_state.expanded_thread_files[entry.expanded_key]
     M.refresh()
   end
+end
+
+---@param direction number
+function M.cycle_thread_cursor(direction)
+  local ui_state = state.get_ui()
+  if
+    not ui_state
+    or not threads_line_map
+    or not ui_state.threads_win
+    or not vim.api.nvim_win_is_valid(ui_state.threads_win)
+  then
+    return
+  end
+
+  local actionable = {}
+  for line_nr, entry in ipairs(threads_line_map) do
+    if entry.type == "thread_file" or entry.type == "thread_note" or entry.type == "stale" then
+      table.insert(actionable, line_nr)
+    end
+  end
+  if #actionable == 0 then
+    return
+  end
+
+  local current = vim.api.nvim_win_get_cursor(ui_state.threads_win)[1]
+  local target = actionable[1]
+  if direction >= 0 then
+    for _, line_nr in ipairs(actionable) do
+      if line_nr > current then
+        target = line_nr
+        break
+      end
+    end
+  else
+    target = actionable[#actionable]
+    for idx = #actionable, 1, -1 do
+      if actionable[idx] < current then
+        target = actionable[idx]
+        break
+      end
+    end
+  end
+
+  vim.api.nvim_set_current_win(ui_state.threads_win)
+  vim.api.nvim_win_set_cursor(ui_state.threads_win, { target, 0 })
 end
 
 ---@param buf number
@@ -4097,7 +4616,14 @@ local function setup_nav_keymaps(buf)
     M.copy_unit_notes_for_scope_entry(entry)
   end, opts)
 
-  if km.toggle_stack and km.toggle_stack ~= km.focus_threads and km.toggle_stack ~= km.focus_diff then
+  if buf == (state.get_ui() and state.get_ui().threads_buf) then
+    vim.keymap.set("n", "<Tab>", function()
+      M.handle_threads_tab(1)
+    end, opts)
+    vim.keymap.set("n", "<S-Tab>", function()
+      M.handle_threads_tab(-1)
+    end, opts)
+  elseif km.toggle_stack and km.toggle_stack ~= km.focus_threads and km.toggle_stack ~= km.focus_diff then
     vim.keymap.set("n", km.toggle_stack, function()
       M.toggle_stack_view()
     end, opts)
@@ -4128,6 +4654,12 @@ local function setup_nav_keymaps(buf)
 
   if km.focus_diff then
     vim.keymap.set("n", km.focus_diff, function()
+      M.focus_diff()
+    end, opts)
+  end
+
+  if km.toggle_split then
+    vim.keymap.set("n", km.toggle_split, function()
       M.focus_diff()
     end, opts)
   end
@@ -4196,14 +4728,7 @@ local function setup_nav_keymaps(buf)
 
   if km.compare_unit then
     vim.keymap.set("n", km.compare_unit, function()
-      local line_map = line_map_for_buffer(buf)
-      local cursor = vim.api.nvim_win_get_cursor(0)
-      local entry = line_map and line_map[cursor[1]]
-      if entry and entry.type == "commit" then
-        M.open_unit_compare(entry.idx)
-      else
-        M.open_unit_compare()
-      end
+      M.open_compare_explorer()
     end, opts)
   end
 
@@ -4318,6 +4843,7 @@ setup_diff_keymaps = function(buf)
       local hunk_start = display_line + 1
       if hunk_start > current_line then
         vim.api.nvim_win_set_cursor(0, { hunk_start, 0 })
+        clamp_diff_cursor_to_code(vim.api.nvim_get_current_win())
         return
       end
       display_line = display_line + #hunk.lines
@@ -4343,6 +4869,7 @@ setup_diff_keymaps = function(buf)
     for i = #hunk_positions, 1, -1 do
       if hunk_positions[i] < current_line then
         vim.api.nvim_win_set_cursor(0, { hunk_positions[i], 0 })
+        clamp_diff_cursor_to_code(vim.api.nvim_get_current_win())
         return
       end
     end
@@ -4374,6 +4901,36 @@ setup_diff_keymaps = function(buf)
   end
   local vopts = { buffer = buf, noremap = true, silent = true, nowait = true }
   vim.keymap.set("v", km.add_note, visual_add_note, vopts)
+
+  vim.keymap.set("n", "<C-v>", function()
+    clamp_diff_cursor_to_code(vim.api.nvim_get_current_win())
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-v>", true, false, true), "n", false)
+  end, opts)
+
+  vim.keymap.set("n", "<LeftMouse>", function()
+    local pos = vim.fn.getmousepos()
+    if pos and pos.winid ~= 0 then
+      pcall(vim.api.nvim_set_current_win, pos.winid)
+      pcall(vim.api.nvim_win_set_cursor, pos.winid, { pos.line, math.max(pos.column - 1, 0) })
+      clamp_diff_cursor_to_code(pos.winid)
+    end
+  end, opts)
+
+  local function visual_yank_code()
+    local sl = vim.fn.line("v")
+    local el = vim.fn.line(".")
+    if sl > el then
+      sl, el = el, sl
+    end
+    local raw_lines = vim.api.nvim_buf_get_lines(buf, sl - 1, el, false)
+    local out = {}
+    for _, line in ipairs(raw_lines) do
+      table.insert(out, strip_diff_gutter(line))
+    end
+    vim.fn.setreg('"', table.concat(out, "\n"))
+    pcall(vim.fn.setreg, "+", table.concat(out, "\n"))
+  end
+  vim.keymap.set("v", "y", visual_yank_code, vopts)
 
   vim.keymap.set("n", km.edit_note, function()
     M.edit_note_at_cursor()
@@ -4459,7 +5016,7 @@ setup_diff_keymaps = function(buf)
 
   if km.compare_unit then
     vim.keymap.set("n", km.compare_unit, function()
-      M.open_unit_compare()
+      M.open_compare_explorer()
     end, opts)
   end
 
@@ -4527,7 +5084,15 @@ setup_diff_keymaps = function(buf)
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = buf,
     callback = function()
+      clamp_diff_cursor_to_code(vim.api.nvim_get_current_win())
       M.update_inline_preview(buf)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("CursorMovedI", {
+    buffer = buf,
+    callback = function()
+      clamp_diff_cursor_to_code(vim.api.nvim_get_current_win())
     end,
   })
 end
@@ -4621,6 +5186,11 @@ function M.open()
   local previous_laststatus = vim.o.laststatus
   vim.o.laststatus = 3
   local ui_prefs = state.get_ui_prefs()
+  local is_compare_session = s.left_ref ~= nil and s.right_ref ~= nil
+  local hide_reviewed_files = ui_prefs.hide_reviewed_files == true
+  if is_compare_session then
+    hide_reviewed_files = false
+  end
 
   state.set_ui({
     files_buf = files_buf,
@@ -4636,10 +5206,10 @@ function M.open()
     view_mode = config.view or "unified",
     file_tree_mode = ui_prefs.file_tree_mode or "tree",
     file_sort_mode = ui_prefs.file_sort_mode or "path",
-    file_attention_filter = ui_prefs.file_attention_filter or "all",
-    hide_reviewed_files = ui_prefs.hide_reviewed_files == true,
-    file_search_query = ui_prefs.file_search_query or "",
-    thread_filter = ui_prefs.thread_filter or "all",
+    file_attention_filter = is_compare_session and "all" or (ui_prefs.file_attention_filter or "all"),
+    hide_reviewed_files = hide_reviewed_files,
+    file_search_query = is_compare_session and "" or (ui_prefs.file_search_query or ""),
+    thread_filter = ui_prefs.thread_filter or "open",
     expanded_files = {},
     collapsed_dirs = {},
     previous_laststatus = previous_laststatus,
@@ -4652,6 +5222,9 @@ function M.open()
   attach_review_quit_guard(files_buf)
   attach_review_quit_guard(threads_buf)
   attach_review_quit_guard(diff_buf)
+  attach_review_window_close_guard(files_win)
+  attach_review_window_close_guard(threads_win)
+  attach_review_window_close_guard(diff_win)
 
   render_files_pane(files_buf)
   render_threads_pane(threads_buf)
@@ -5694,6 +6267,12 @@ function M.open_notes_list(opts)
 
   local lines = {}
   local note_refs = {} -- maps display line -> {note_idx, file_path, line, note_id}
+  local note_index_by_id = {}
+  for i, note in ipairs(state.get_notes()) do
+    if note.id then
+      note_index_by_id[note.id] = i
+    end
+  end
   local highlight_rows = {} -- {line_idx, hl_group, col_start, col_end}
 
   local width, col_offset = float_dimensions()
@@ -5936,7 +6515,7 @@ function M.open_notes_list(opts)
     highlight_rows[#lines] = { hl = hl, col_start = 2, col_end = 2 + #icon }
     table.insert(extra_hls, { #lines, HL.note_ref, 4, 4 + #id_label })
     note_refs[#lines] = {
-      idx = entry.idx,
+      idx = note_index_by_id[note.id] or entry.idx,
       file_path = note.file_path,
       line = note.line,
       side = note.side,
@@ -6010,6 +6589,7 @@ function M.open_notes_list(opts)
       "y clipboard",
       "u unit",
       "Y local",
+      "d delete",
       "x resolve",
       "a attach",
       "R refresh",
@@ -6121,6 +6701,35 @@ function M.open_notes_list(opts)
 
   local buf_opts = { buffer = list_buf, noremap = true, silent = true }
 
+  local function delete_note_from_list()
+    local cursor = vim.api.nvim_win_get_cursor(list_win)
+    local ref = note_refs[cursor[1]]
+    if not ref or ref == false or not ref.note_id then
+      return
+    end
+    local note_obj = state.get_note_by_id(ref.note_id)
+    if not note_obj then
+      return
+    end
+    if note_obj.status == "remote" then
+      vim.notify("Open the thread view to delete remote comments", vim.log.levels.INFO)
+      return
+    end
+
+    local choice = vim.fn.confirm(string.format("Delete note #%d?", ref.note_id), "&Delete\n&Cancel", 2)
+    if choice ~= 1 then
+      return
+    end
+
+    state.remove_note(ref.idx)
+    vim.notify("Note #" .. tostring(ref.note_id) .. " deleted", vim.log.levels.INFO)
+    close_notes_list_window(list_win)
+    M.refresh()
+    if #state.get_notes() > 0 then
+      M.open_notes_list()
+    end
+  end
+
   vim.keymap.set("n", "q", function()
     close_notes_list_window(list_win)
   end, buf_opts)
@@ -6144,6 +6753,10 @@ function M.open_notes_list(opts)
     state.toggle_staged(ref.note_id)
     reopen_notes_list(list_win)
     M.refresh()
+  end, buf_opts)
+
+  vim.keymap.set("n", "d", function()
+    delete_note_from_list()
   end, buf_opts)
 
   vim.keymap.set("n", "P", function()

@@ -133,9 +133,10 @@ end
 ---@param lines string[]
 ---@param session ReviewSession
 ---@param note ReviewNote
-local function append_enriched_note(lines, session, note)
+---@param opts table|nil
+local function append_enriched_note(lines, session, note, opts)
+  opts = opts or {}
   table.insert(lines, "### " .. export_note_heading(note))
-  table.insert(lines, "")
   table.insert(lines, "- id: #" .. tostring(note.id or "?"))
   table.insert(lines, "- unit: `" .. M.note_unit_label(session, note) .. "`")
   table.insert(lines, "- meta: " .. table.concat(export_note_meta(note), ", "))
@@ -149,7 +150,7 @@ local function append_enriched_note(lines, session, note)
   if note.commit_short_sha then
     table.insert(lines, "- commit: `" .. note.commit_short_sha .. "`")
   end
-  if note.gitbutler then
+  if opts.include_scope_details and note.gitbutler then
     table.insert(lines, "- gitbutler: `" .. vim.fn.json_encode(note.gitbutler) .. "`")
   end
   if note.url then
@@ -161,14 +162,14 @@ local function append_enriched_note(lines, session, note)
   if note.validation then
     table.insert(lines, "- validation: `" .. tostring(note.validation) .. "`")
   end
-  table.insert(lines, "")
 
-  local hunk = note_hunk_lines(note, find_note_file(session, note))
-  if hunk then
-    table.insert(lines, "```diff")
-    vim.list_extend(lines, hunk)
-    table.insert(lines, "```")
-    table.insert(lines, "")
+  if opts.include_hunks then
+    local hunk = note_hunk_lines(note, find_note_file(session, note))
+    if hunk then
+      table.insert(lines, "```diff")
+      vim.list_extend(lines, hunk)
+      table.insert(lines, "```")
+    end
   end
 
   if note.note_type == "suggestion" and (note.body or ""):match("```suggestion") then
@@ -176,7 +177,6 @@ local function append_enriched_note(lines, session, note)
   else
     table.insert(lines, note.body or "")
   end
-  table.insert(lines, "")
 
   if note.blame_context then
     table.insert(lines, "- blame: " .. tostring(note.blame_context))
@@ -187,7 +187,6 @@ local function append_enriched_note(lines, session, note)
 
   if note.status == "remote" and note.replies and #note.replies > 1 then
     table.insert(lines, "Replies:")
-    table.insert(lines, "")
     for i = 2, #note.replies do
       local reply = note.replies[i]
       local header = "- @" .. (reply.author or "unknown")
@@ -200,7 +199,6 @@ local function append_enriched_note(lines, session, note)
       table.insert(lines, header)
       table.insert(lines, "  " .. (reply.body or ""))
     end
-    table.insert(lines, "")
   end
 end
 
@@ -243,7 +241,7 @@ local function build_export_content(session, notes)
     table.insert(lines, "## " .. unit_key)
     table.insert(lines, "")
     for _, note in ipairs(unit_notes) do
-      append_enriched_note(lines, session, note)
+      append_enriched_note(lines, session, note, { include_hunks = true, include_scope_details = true })
     end
   end
 
@@ -285,9 +283,27 @@ local function append_clipboard_section(lines, session, title, notes)
   table.insert(lines, "## " .. title)
   table.insert(lines, "")
 
-  for _, note in ipairs(notes) do
+  for idx, note in ipairs(notes) do
+    if idx > 1 then
+      table.insert(lines, "")
+    end
     append_enriched_note(lines, session, note)
   end
+end
+
+---@param lines string[]
+---@return string[]
+local function compact_empty_lines(lines)
+  local out = {}
+  local last_empty = false
+  for _, line in ipairs(lines) do
+    local is_empty = line == ""
+    if not (is_empty and last_empty) then
+      table.insert(out, line)
+    end
+    last_empty = is_empty
+  end
+  return out
 end
 
 ---@param session ReviewSession
@@ -315,7 +331,7 @@ local function build_clipboard_content(session, notes)
   append_clipboard_section(lines, session, "Open Threads", open_threads)
   append_clipboard_section(lines, session, "Discussion", discussion_notes)
 
-  return table.concat(lines, "\n")
+  return table.concat(compact_empty_lines(lines), "\n")
 end
 
 ---@param session ReviewSession
@@ -346,7 +362,7 @@ local function build_local_notes_clipboard_content(session, notes)
   }
 
   append_clipboard_section(lines, session, "Your Notes", local_notes)
-  return table.concat(lines, "\n")
+  return table.concat(compact_empty_lines(lines), "\n")
 end
 
 ---@param opts table|nil

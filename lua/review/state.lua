@@ -124,6 +124,10 @@ end
 ---@field branch string|nil
 ---@field requested_ref string|nil
 ---@field base_ref string
+---@field left_ref string|nil
+---@field right_ref string|nil
+---@field comparison_key string|nil
+---@field previous_review table|nil
 ---@field head_ref string|nil
 ---@field merge_base_ref string|nil
 ---@field files ReviewFile[]             All files (full diff)
@@ -251,6 +255,10 @@ function M.create(mode, base_ref, files, opts)
     branch = opts.branch or git.current_branch() or "HEAD",
     requested_ref = opts.requested_ref,
     base_ref = base_ref,
+    left_ref = opts.left_ref,
+    right_ref = opts.right_ref,
+    comparison_key = opts.comparison_key,
+    previous_review = opts.previous_review,
     head_ref = opts.head_ref,
     merge_base_ref = opts.merge_base_ref,
     files = files,
@@ -305,6 +313,20 @@ function M.create(mode, base_ref, files, opts)
   active_tab = key
 
   return session
+end
+
+---@return string|nil
+function M.comparison_key()
+  if not session then
+    return nil
+  end
+  if session.comparison_key then
+    return session.comparison_key
+  end
+  if session.left_ref and session.right_ref then
+    return table.concat({ session.vcs or "git", session.left_ref, session.right_ref }, "::")
+  end
+  return nil
 end
 
 --- Get the current session.
@@ -439,12 +461,17 @@ function M.scope_mode()
 end
 
 ---@param mode "all"|"current_commit"|"select_commit"
-function M.set_scope_mode(mode)
+---@param opts table|nil
+function M.set_scope_mode(mode, opts)
   if not session then
     return
   end
+  opts = opts or {}
   session.scope_mode = mode
   if mode == "all" then
+    session.current_commit_idx = nil
+    session.current_file_idx = 1
+  elseif mode == "select_commit" and opts.keep_all_files then
     session.current_commit_idx = nil
     session.current_file_idx = 1
   elseif not session.current_commit_idx and #session.commits > 0 then
@@ -680,6 +707,16 @@ function M.add_note(file_path, line, body, end_line, side, note_type, opts)
     validation = opts.validation,
     url = nil,
   }
+  local comparison_key = M.comparison_key()
+  if comparison_key then
+    note.comparison_key = comparison_key
+    note.comparison = {
+      vcs = session.vcs or "git",
+      left_ref = session.left_ref or session.base_ref,
+      right_ref = session.right_ref or session.head_ref,
+      requested_ref = session.requested_ref,
+    }
+  end
   next_note_id = next_note_id + 1
   table.insert(session.notes, note)
   rebuild_note_indexes()
@@ -733,10 +770,15 @@ function M.note_is_stale(note)
   if not session then
     return false
   end
-  if session.vcs == "gitbutler" and not has_gitbutler_scope(note) then
+  local active_comparison_key = M.comparison_key()
+  if note.comparison_key and active_comparison_key and note.comparison_key ~= active_comparison_key then
     return true
   end
-  if note.commit_sha and not M.has_commit(note.commit_sha) then
+  local gitbutler_scope_matches = session.vcs == "gitbutler" and has_gitbutler_scope(note)
+  if session.vcs == "gitbutler" and not gitbutler_scope_matches then
+    return true
+  end
+  if note.commit_sha and not M.has_commit(note.commit_sha) and not gitbutler_scope_matches then
     return true
   end
   if note.status == "remote" then
@@ -767,7 +809,27 @@ function M.note_in_scope(note)
   end
 
   local commit = M.current_commit()
-  return commit ~= nil and note.commit_sha == commit.sha
+  if not commit then
+    return false
+  end
+
+  if session.vcs == "gitbutler" and note.gitbutler and commit.gitbutler then
+    local note_gb = note.gitbutler
+    local commit_gb = commit.gitbutler
+    if note_gb.kind == commit_gb.kind then
+      if note_gb.kind == "unassigned" then
+        return true
+      end
+      if note_gb.branch_cli_id and note_gb.branch_cli_id == commit_gb.branch_cli_id then
+        return true
+      end
+      if note_gb.branch_name and note_gb.branch_name == commit_gb.branch_name then
+        return true
+      end
+    end
+  end
+
+  return note.commit_sha == commit.sha
 end
 
 ---@return ReviewNote[], ReviewNote[]
@@ -794,6 +856,15 @@ function M.remove_note(idx)
     table.remove(session.notes, idx)
     rebuild_note_indexes()
     get_storage().save(session)
+  end
+end
+
+--- Remove a note by ID.
+---@param note_id number
+function M.remove_note_by_id(note_id)
+  local _, idx = M.get_note_by_id(note_id)
+  if idx then
+    M.remove_note(idx)
   end
 end
 

@@ -37,19 +37,19 @@ local defaults = {
     toggle_stack = "<Tab>",
     refresh = "R",
     focus_files = "f",
-    focus_diff = "<leader>d",
+    focus_diff = "<BS>",
     focus_git = nil,
-    focus_threads = "T",
-    toggle_file_tree = "t",
+    focus_threads = "t",
+    toggle_file_tree = nil,
     sort_files = "o",
     toggle_reviewed = "H",
     filter_attention = "A",
-    change_base = "B",
+    change_base = "<leader>B",
     mark_baseline = "M",
-    compare_baseline = "V",
+    compare_baseline = "<leader>V",
     compare_unit = "C",
     commit_details = "K",
-    blame = "b",
+    blame = "B",
     file_history = "L",
     notes_list = "N",
     suggestion = "S",
@@ -223,6 +223,143 @@ function M._open_with_ref(ref, opts)
   return true
 end
 
+---@param left_ref string
+---@param right_ref string
+---@param opts table|nil
+---@return boolean
+function M._open_with_refs(left_ref, right_ref, opts)
+  opts = opts or {}
+  left_ref = vim.trim(tostring(left_ref or ""))
+  right_ref = vim.trim(tostring(right_ref or ""))
+  if left_ref == "" or right_ref == "" then
+    vim.notify("Choose both refs before comparing", vim.log.levels.WARN)
+    return false
+  end
+
+  local git = require("review.git")
+  local diff_mod = require("review.diff")
+  local state = require("review.state")
+  local ui = require("review.ui")
+
+  if not git.ref_exists(left_ref) then
+    vim.notify("Could not resolve left ref: " .. left_ref, vim.log.levels.WARN)
+    return false
+  end
+  if not git.ref_exists(right_ref) then
+    vim.notify("Could not resolve right ref: " .. right_ref, vim.log.levels.WARN)
+    return false
+  end
+
+  local diff_text, diff_err = git.diff_range(left_ref, right_ref)
+  if diff_text == "" then
+    vim.notify(
+      diff_err and ("Could not compare refs: " .. diff_err)
+        or ("No changes between " .. left_ref .. " and " .. right_ref),
+      diff_err and vim.log.levels.WARN or vim.log.levels.INFO
+    )
+    return false
+  end
+
+  local files = diff_mod.parse(diff_text)
+  if #files == 0 then
+    vim.notify("No files changed between " .. left_ref .. " and " .. right_ref, vim.log.levels.INFO)
+    return false
+  end
+
+  if opts.close_ui ~= false and state.get_ui() then
+    ui.close()
+  end
+
+  state.create("local", left_ref, files, {
+    repo_root = git.root(),
+    branch = git.current_branch() or "HEAD",
+    head_ref = right_ref,
+    left_ref = left_ref,
+    right_ref = right_ref,
+    comparison_key = table.concat({ "git", left_ref, right_ref }, "::"),
+    previous_review = opts.previous_review,
+    requested_ref = left_ref .. ".." .. right_ref,
+    merge_base_ref = git.merge_base and git.merge_base(left_ref, right_ref) or nil,
+    untracked_files = {},
+    workspace_signature = git.workspace_signature and git.workspace_signature() or nil,
+  })
+
+  local commits = git.log(left_ref, right_ref)
+  if #commits > 0 then
+    state.set_commits(commits)
+  end
+
+  if opts.open_ui ~= false then
+    ui.open()
+    if opts.focus then
+      vim.schedule(function()
+        require("review.ui").jump_to_file_location(opts.focus.file_path, opts.focus.line, opts.focus.side)
+      end)
+    end
+  end
+
+  return true
+end
+
+---@param target string
+---@param opts table|nil
+---@return boolean
+function M._open_gitbutler_target(target, opts)
+  opts = opts or {}
+  target = vim.trim(tostring(target or ""))
+
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+  local state = require("review.state")
+  local ui = require("review.ui")
+
+  local diff_target = target ~= "" and target or nil
+  local files, err = gitbutler.diff_files(diff_target, {
+    gitbutler = { kind = "cli", cli_id = target },
+  })
+  if not files then
+    vim.notify(
+      "Could not compare GitButler target " .. (target ~= "" and target or "workspace") .. ": " .. (err or "unknown"),
+      vim.log.levels.WARN
+    )
+    return false
+  end
+  if #files == 0 then
+    vim.notify("No changes for GitButler target " .. (target ~= "" and target or "workspace"), vim.log.levels.INFO)
+    return false
+  end
+
+  local status = gitbutler.status()
+  local base_ref = status and status.mergeBase and status.mergeBase.commitId or "gitbutler/workspace"
+  if opts.close_ui ~= false and state.get_ui() then
+    ui.close()
+  end
+
+  state.create("local", base_ref, files, {
+    vcs = "gitbutler",
+    repo_root = git.root(),
+    branch = git.current_branch() or "gitbutler/workspace",
+    left_ref = base_ref,
+    right_ref = "but:" .. (target ~= "" and target or "workspace"),
+    comparison_key = table.concat({ "gitbutler", base_ref, "but:" .. (target ~= "" and target or "workspace") }, "::"),
+    previous_review = opts.previous_review,
+    requested_ref = "but:" .. (target ~= "" and target or "workspace"),
+    untracked_files = {},
+    gitbutler = status,
+  })
+
+  if opts.open_ui ~= false then
+    ui.open()
+    if opts.focus then
+      vim.schedule(function()
+        require("review.ui").jump_to_file_location(opts.focus.file_path, opts.focus.line, opts.focus.side)
+      end)
+    end
+  end
+
+  return true
+end
+
 --- Open a review session.
 --- Usage:
 ---   :Review          — auto-detect: if on a branch with an open PR, review against default branch; otherwise diff against HEAD
@@ -336,6 +473,54 @@ function M.reopen_session()
   M.open(requested_ref and { requested_ref } or {})
 end
 
+---@param s ReviewSession|nil
+---@return table|nil
+local function review_return_target(s)
+  if not s then
+    return nil
+  end
+  if s.previous_review then
+    return vim.deepcopy(s.previous_review)
+  end
+  if s.vcs == "gitbutler" then
+    local target = s.requested_ref and tostring(s.requested_ref):match("^but:(.+)$") or nil
+    if target and target ~= "workspace" then
+      return { kind = "gitbutler_target", target = target }
+    end
+    return { kind = "default" }
+  end
+  if s.requested_ref and s.requested_ref ~= "" and not (s.left_ref and s.right_ref) then
+    return { kind = "git_ref", ref = s.requested_ref }
+  end
+  return { kind = "default" }
+end
+
+---@return boolean
+function M.back()
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    vim.notify("No active review session", vim.log.levels.ERROR)
+    return false
+  end
+  if not s.previous_review then
+    vim.notify("No previous review to return to", vim.log.levels.INFO)
+    return false
+  end
+
+  local target = s.previous_review
+  if target.kind == "git_ref" and target.ref and target.ref ~= "" then
+    M.open({ target.ref })
+  elseif target.kind == "gitbutler_target" then
+    M._open_gitbutler_target(target.target or "")
+  else
+    M.open({})
+  end
+  return true
+end
+
+M._review_return_target = review_return_target
+
 ---@param ref string|nil
 ---@return boolean|nil
 function M.change_base(ref)
@@ -350,7 +535,10 @@ function M.change_base(ref)
     return false
   end
   if s.vcs == "gitbutler" then
-    vim.notify("GitButler review base comes from workspace metadata", vim.log.levels.WARN)
+    vim.notify(
+      "GitButler reviews use the workspace merge base; reopen outside GitButler to pick a base",
+      vim.log.levels.WARN
+    )
     return false
   end
 
@@ -443,6 +631,16 @@ local function session_diff_ref(s)
     diff_ref = s.base_ref
   end
   return diff_ref
+end
+
+---@param s ReviewSession
+---@return string|nil left_ref
+---@return string|nil right_ref
+local function session_diff_refs(s)
+  if s.left_ref and s.right_ref and not tostring(s.right_ref):match("^but:") then
+    return s.left_ref, s.right_ref
+  end
+  return nil, nil
 end
 
 ---@param previous_commits table[]
@@ -549,6 +747,40 @@ local function apply_gitbutler_refresh(s, review_data)
   end
 end
 
+---@param ref string|nil
+---@return string|nil
+local function gitbutler_target_from_ref(ref)
+  local target = ref and tostring(ref):match("^but:(.+)$") or nil
+  if target == "workspace" then
+    return nil
+  end
+  return target
+end
+
+---@param s ReviewSession
+---@param files ReviewFile[]
+local function apply_gitbutler_target_refresh(s, files)
+  local state = require("review.state")
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+
+  s.files = files or {}
+  s.untracked_files = {}
+  s.repo_root = git.root()
+  s.branch = git.current_branch() or "gitbutler/workspace"
+  s.gitbutler = gitbutler.status() or s.gitbutler
+  s.commits = {}
+  s.current_commit_idx = nil
+  s.scope_mode = "all"
+
+  local active_files = state.active_files()
+  if #active_files == 0 then
+    s.current_file_idx = 1
+  else
+    s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
+  end
+end
+
 ---@param workspace_signature string|nil
 ---@return boolean
 function M.refresh_local_session(workspace_signature)
@@ -566,6 +798,17 @@ function M.refresh_local_session(workspace_signature)
   local_refresh_seq = local_refresh_seq + 1
 
   if s.vcs == "gitbutler" then
+    local target = gitbutler_target_from_ref(s.right_ref)
+    if target then
+      local files = gitbutler.diff_files(target, {
+        gitbutler = { kind = "cli", cli_id = target },
+      })
+      if not files then
+        return false
+      end
+      apply_gitbutler_target_refresh(s, files)
+      return true
+    end
     local review_data = gitbutler.workspace_review()
     if not review_data then
       return false
@@ -575,10 +818,12 @@ function M.refresh_local_session(workspace_signature)
   end
 
   local previous_commit_by_sha, previous_commit_sha = snapshot_commit_state(s)
+  local left_ref, right_ref = session_diff_refs(s)
   local diff_ref = session_diff_ref(s)
-  local diff_text = git.diff(diff_ref)
-  local commits = diff_ref and git.log(diff_ref) or {}
-  local merge_base_ref = diff_ref and git.merge_base and git.merge_base(diff_ref, "HEAD") or nil
+  local diff_text = left_ref and git.diff_range(left_ref, right_ref) or git.diff(diff_ref)
+  local commits = left_ref and git.log(left_ref, right_ref) or (diff_ref and git.log(diff_ref) or {})
+  local merge_base_ref = left_ref and git.merge_base and git.merge_base(left_ref, right_ref)
+    or (diff_ref and git.merge_base and git.merge_base(diff_ref, "HEAD") or nil)
   apply_local_git_refresh(
     s,
     diff_text,
@@ -612,6 +857,26 @@ function M.refresh_local_session_async(workspace_signature, callback)
   state.set_local_refresh_loading(true)
 
   if s.vcs == "gitbutler" then
+    local target = gitbutler_target_from_ref(s.right_ref)
+    if target then
+      gitbutler.diff_files_async(target, {
+        gitbutler = { kind = "cli", cli_id = target },
+      }, function(files, err)
+        if request_token ~= local_refresh_seq or state.get() ~= s then
+          callback(false, "superseded")
+          return
+        end
+        if not files then
+          state.set_local_refresh_loading(false)
+          callback(false, err)
+          return
+        end
+        apply_gitbutler_target_refresh(s, files)
+        state.set_local_refresh_loading(false)
+        callback(true, nil)
+      end)
+      return
+    end
     if type(gitbutler.workspace_review_async) ~= "function" then
       local ok = M.refresh_local_session(workspace_signature)
       state.set_local_refresh_loading(false)
@@ -636,10 +901,11 @@ function M.refresh_local_session_async(workspace_signature, callback)
   end
 
   local previous_commit_by_sha, previous_commit_sha = snapshot_commit_state(s)
+  local left_ref, right_ref = session_diff_refs(s)
   local diff_ref = session_diff_ref(s)
   local diff_done = false
-  local log_done = diff_ref == nil
-  local merge_base_done = diff_ref == nil
+  local log_done = diff_ref == nil and left_ref == nil
+  local merge_base_done = diff_ref == nil and left_ref == nil
   local diff_text = ""
   local commits = {}
   local merge_base_ref = nil
@@ -667,15 +933,19 @@ function M.refresh_local_session_async(workspace_signature, callback)
   end
 
   local function load_diff(callback)
-    if git.diff_async then
+    if left_ref and git.diff_range_async then
+      git.diff_range_async(left_ref, right_ref, callback)
+    elseif git.diff_async then
       git.diff_async(diff_ref, callback)
     else
-      callback(git.diff(diff_ref), nil)
+      callback(left_ref and git.diff_range(left_ref, right_ref) or git.diff(diff_ref), nil)
     end
   end
 
   local function load_log(callback)
-    if not diff_ref then
+    if left_ref then
+      git.log_async(left_ref, right_ref, callback)
+    elseif not diff_ref then
       callback({}, nil)
     elseif git.log_async then
       git.log_async(diff_ref, nil, callback)
@@ -697,15 +967,18 @@ function M.refresh_local_session_async(workspace_signature, callback)
     log_done = true
     finish()
   end)
-  if diff_ref and git.merge_base_async then
-    git.merge_base_async(diff_ref, "HEAD", function(result, err)
+  if (left_ref or diff_ref) and git.merge_base_async then
+    git.merge_base_async(left_ref or diff_ref, right_ref or "HEAD", function(result, err)
       merge_base_ref = result
       first_err = first_err or err
       merge_base_done = true
       finish()
     end)
   else
-    merge_base_ref = diff_ref and git.merge_base and git.merge_base(diff_ref, "HEAD") or nil
+    merge_base_ref = (left_ref or diff_ref)
+        and git.merge_base
+        and git.merge_base(left_ref or diff_ref, right_ref or "HEAD")
+      or nil
     merge_base_done = true
     finish()
   end
@@ -809,6 +1082,10 @@ end
 ---@param idx string|number|nil
 function M.compare_unit(idx)
   require("review.ui").open_unit_compare(idx and tonumber(idx) or nil)
+end
+
+function M.compare()
+  require("review.compare").open()
 end
 
 ---@param content string
