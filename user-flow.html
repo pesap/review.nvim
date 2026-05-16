@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>review.nvim User Flow</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --ink: #18212b;
+      --muted: #667382;
+      --line: #d9e1ea;
+      --start: #e8f4ff;
+      --review: #ecf8f1;
+      --decision: #fff5d8;
+      --context: #eef0ff;
+      --publish: #f6edff;
+      --danger: #ffecec;
+      --accent: #2166d5;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1540px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 48px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: end;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: 560px;
+    }
+
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(230px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+
+    .lane {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .lane h2 {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .steps {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .step {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #fff;
+      min-height: 92px;
+    }
+
+    .step::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: -11px;
+      width: 1px;
+      height: 10px;
+      background: var(--line);
+    }
+
+    .step:last-child::after { display: none; }
+
+    .start { background: var(--start); }
+    .review { background: var(--review); }
+    .decision { background: var(--decision); }
+    .context { background: var(--context); }
+    .publish { background: var(--publish); }
+    .danger { background: var(--danger); }
+
+    .step-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: start;
+      margin-bottom: 5px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      max-width: 92px;
+      min-height: 24px;
+      padding: 2px 6px;
+      border: 1px solid #a9b6c4;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: #fff;
+      color: #101820;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .journeys {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .special-flows {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 16px;
+    }
+
+    .path {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .path-node {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #fff;
+      min-height: 108px;
+    }
+
+    .path-node strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .path-node span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .arrow {
+      color: var(--accent);
+      font-weight: 800;
+      margin-top: 8px;
+      display: block;
+    }
+
+    .outcomes {
+      display: grid;
+      gap: 8px;
+    }
+
+    .outcome {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .outcome strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .outcome p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 1180px) {
+      .flow-grid,
+      .journeys,
+      .special-flows,
+      .path {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100vw - 20px, 1540px);
+        padding-top: 14px;
+      }
+
+      header,
+      .flow-grid,
+      .journeys,
+      .special-flows,
+      .path {
+        grid-template-columns: 1fr;
+      }
+
+      .legend {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>review.nvim User Flow</h1>
+        <p class="subtitle">A reviewer journey map for moving from opening a review to publishing or exporting actionable feedback.</p>
+      </div>
+      <div class="legend">
+        <span class="tag">Entry points</span>
+        <span class="tag">Navigation decisions</span>
+        <span class="tag">Review actions</span>
+        <span class="tag">Context capture</span>
+        <span class="tag">Output workflow</span>
+      </div>
+    </header>
+
+    <section class="panel" style="margin-top:16px;">
+      <h2>Primary Review Journey</h2>
+      <div class="path">
+        <div class="path-node start">
+          <strong>Open Review</strong>
+          <span><kbd>:Review</kbd> creates the review tab and loads local, ref, PR/MR, or GitButler context.</span>
+          <span class="arrow">Next: scan scope</span>
+        </div>
+        <div class="path-node review">
+          <strong>Choose Work Unit</strong>
+          <span>Use Files for all changes, or scope rows for commit/GitButler units.</span>
+          <span class="arrow">Next: inspect diff</span>
+        </div>
+        <div class="path-node review">
+          <strong>Read Diff</strong>
+          <span>Move through hunks/files, toggle split, return between rail and diff with <kbd>s</kbd>.</span>
+          <span class="arrow">Next: decide</span>
+        </div>
+        <div class="path-node decision">
+          <strong>Need Feedback?</strong>
+          <span>No issue: mark reviewed. Issue found: add note or suggestion with selected code.</span>
+          <span class="arrow">Next: manage queue</span>
+        </div>
+        <div class="path-node publish">
+          <strong>Publish / Export</strong>
+          <span>Stage notes, publish to forge, or copy/export a handoff packet.</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="flow-grid">
+      <section class="lane">
+        <h2>1. Start And Scope</h2>
+        <div class="steps">
+          <div class="step start">
+            <div class="step-title"><span>Open session</span><kbd>:Review</kbd></div>
+            <p>Resolve review target, detect GitButler workspace, load files, commits, remote threads, and local notes.</p>
+          </div>
+          <div class="step review">
+            <div class="step-title"><span>Pick mode</span><kbd>&lt;Tab&gt;</kbd></div>
+            <p>All changes, current commit, or select commit. GitButler maps this to branch/unassigned review units.</p>
+          </div>
+          <div class="step decision">
+            <div class="step-title"><span>Compare units?</span><kbd>C</kbd></div>
+            <p>When units overlap or depend on each other, open a comparison before reviewing line-by-line.</p>
+          </div>
+          <div class="step context">
+            <div class="step-title"><span>Open details</span><kbd>K</kbd></div>
+            <p>Inspect commit or review-unit metadata before deciding where to start.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="lane">
+        <h2>2. Navigate Review Surface</h2>
+        <div class="steps">
+          <div class="step review">
+            <div class="step-title"><span>Open file</span><kbd>&lt;CR&gt;</kbd></div>
+            <p>From Files, select a file and move into the diff pane.</p>
+          </div>
+          <div class="step review">
+            <div class="step-title"><span>Move through code</span><kbd>]c</kbd></div>
+            <p>Jump hunks and files while the cursor stays on code, not the diff gutter.</p>
+          </div>
+          <div class="step review">
+            <div class="step-title"><span>Switch layout</span><kbd>s</kbd></div>
+            <p>In the diff, toggle unified versus split. In Files/Threads, return to the last diff/split position.</p>
+          </div>
+          <div class="step decision">
+            <div class="step-title"><span>Check thread queue</span><kbd>t</kbd></div>
+            <p>Move to Threads to inspect local notes, remote discussions, stale context, and review timeline.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="lane">
+        <h2>3. Create Feedback</h2>
+        <div class="steps">
+          <div class="step decision">
+            <div class="step-title"><span>Select exact code</span><kbd>V</kbd></div>
+            <p>Use native visual-line selection or visual block. Gutter numbers and +/- signs are excluded from copied code.</p>
+          </div>
+          <div class="step review">
+            <div class="step-title"><span>Add note</span><kbd>a</kbd></div>
+            <p>Create a line or range note from the current cursor or visual selection.</p>
+          </div>
+          <div class="step review">
+            <div class="step-title"><span>Suggest patch</span><kbd>S</kbd></div>
+            <p>Create a suggestion note with a GitHub-compatible suggestion block.</p>
+          </div>
+          <div class="step context">
+            <div class="step-title"><span>Add evidence</span><kbd>B</kbd></div>
+            <p>Open blame, attach selected blame context, or open file history with <kbd>L</kbd>.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="lane">
+        <h2>4. Manage And Deliver</h2>
+        <div class="steps">
+          <div class="step publish">
+            <div class="step-title"><span>Open queue</span><kbd>N</kbd></div>
+            <p>Review all draft, staged, resolved, published, local, and remote note items.</p>
+          </div>
+          <div class="step publish">
+            <div class="step-title"><span>Stage feedback</span><kbd>s</kbd></div>
+            <p>Toggle notes between draft and staged so only ready feedback is published.</p>
+          </div>
+          <div class="step publish">
+            <div class="step-title"><span>Publish or handoff</span><kbd>P</kbd></div>
+            <p>Publish staged notes to GitHub/GitLab, or copy a full/unit/local handoff packet.</p>
+          </div>
+          <div class="step danger">
+            <div class="step-title"><span>Clean up</span><kbd>d</kbd></div>
+            <p>Delete local notes, resolve/reopen notes, clear local feedback, or refresh stale remote context.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="journeys">
+      <section class="panel">
+        <h2>Common UX Paths</h2>
+        <div class="path">
+          <div class="path-node start">
+            <strong>Quick Review</strong>
+            <span><kbd>:Review</kbd> -> file -> hunks -> mark reviewed.</span>
+          </div>
+          <div class="path-node review">
+            <strong>Comment Flow</strong>
+            <span>Diff -> select lines -> <kbd>a</kbd> -> draft note -> notes list.</span>
+          </div>
+          <div class="path-node review">
+            <strong>Suggestion Flow</strong>
+            <span>Diff -> visual range -> <kbd>S</kbd> -> edit suggestion -> stage.</span>
+          </div>
+          <div class="path-node context">
+            <strong>Context Flow</strong>
+            <span><kbd>B</kbd> blame or <kbd>L</kbd> history -> attach row -> add note.</span>
+          </div>
+          <div class="path-node publish">
+            <strong>Delivery Flow</strong>
+            <span><kbd>N</kbd> notes -> stage -> publish, export, or copy handoff.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Decision Outcomes</h2>
+        <div class="outcomes">
+          <div class="outcome">
+            <strong>No issue found</strong>
+            <p>Mark file/unit reviewed, hide reviewed files if needed, continue to next file.</p>
+          </div>
+          <div class="outcome">
+            <strong>Issue needs explanation</strong>
+            <p>Add a note, optionally attach blame/history context, leave as draft until reviewed.</p>
+          </div>
+          <div class="outcome">
+            <strong>Issue has exact fix</strong>
+            <p>Create a suggestion note from selected code and stage it for publishing.</p>
+          </div>
+          <div class="outcome">
+            <strong>Remote context changed</strong>
+            <p>Refresh review data, stale notes/threads move into stale sections instead of disappearing.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="special-flows">
+      <section class="panel">
+        <h2>Change Review Base Flow</h2>
+        <div class="path">
+          <div class="path-node start">
+            <strong>Start In Local Review</strong>
+            <span>Base changes are available for local git review sessions. GitButler uses its workspace merge base.</span>
+            <span class="arrow">Trigger</span>
+          </div>
+          <div class="path-node decision">
+            <strong>Open Base Prompt</strong>
+            <span>Press <kbd>&lt;leader&gt;B</kbd> or run <kbd>:ReviewChangeBase</kbd>.</span>
+            <span class="arrow">Choose ref</span>
+          </div>
+          <div class="path-node review">
+            <strong>Enter Base Ref</strong>
+            <span>Type a branch, tag, commit, or relative ref such as main, HEAD~2, or origin/main.</span>
+            <span class="arrow">Rebuild</span>
+          </div>
+          <div class="path-node context">
+            <strong>Refresh Diff</strong>
+            <span>review.nvim re-diffs the active session against the new base and preserves relevant review state.</span>
+            <span class="arrow">Continue</span>
+          </div>
+          <div class="path-node publish">
+            <strong>Review Against New Base</strong>
+            <span>Files, threads, and notes now reflect the updated comparison target.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Compare Commits / Review Units Flow</h2>
+        <div class="path">
+          <div class="path-node start">
+            <strong>Expose Units</strong>
+            <span>Use <kbd>&lt;Tab&gt;</kbd> until commit or GitButler review-unit rows are visible in the rail.</span>
+            <span class="arrow">Pick left</span>
+          </div>
+          <div class="path-node review">
+            <strong>Select Current Unit</strong>
+            <span>Press <kbd>&lt;CR&gt;</kbd> on the commit/unit you want as the left side of the comparison.</span>
+            <span class="arrow">Compare</span>
+          </div>
+          <div class="path-node decision">
+            <strong>Choose Compare</strong>
+            <span>Press <kbd>C</kbd>. On a different unit row, that row becomes the right side. Otherwise a picker opens.</span>
+            <span class="arrow">Inspect</span>
+          </div>
+          <div class="path-node context">
+            <strong>Read Unit Diff</strong>
+            <span>The comparison popup shows overlap, left-only files, and right-only files for the two units.</span>
+            <span class="arrow">Act</span>
+          </div>
+          <div class="path-node publish">
+            <strong>Return To Review</strong>
+            <span>Use the result to choose review order, identify duplicated changes, or add targeted feedback.</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="note">
+      The flow emphasizes UX intent: rails are for orientation and queue navigation, diff/split is for code decisions, context panels collect evidence, and the notes list is the delivery checkpoint.
+    </div>
+  </main>
+</body>
+</html>

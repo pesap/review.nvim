@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>review.nvim — UI Mockup</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --bg-surface: #181825;
+    --bg-mantle: #11111b;
+    --bg-crust: #0a0a14;
+    --fg: #cdd6f4;
+    --fg-dim: #6c7086;
+    --fg-muted: #585b70;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --red: #f38ba8;
+    --yellow: #f9e2af;
+    --peach: #fab387;
+    --mauve: #cba6f7;
+    --teal: #94e2d5;
+    --lavender: #b4befe;
+    --overlay: #313244;
+    --border: #45475a;
+    --selection: #2a2b3d;
+    --active: #1e3a5f;
+    --popup-bg: #1e1e2e;
+    --popup-border: #585b70;
+    --note-bg: #2a2d1e;
+    --reviewed-fg: #585b70;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', monospace;
+    font-size: 13px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg-crust);
+    color: var(--fg);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── Top bar ─── */
+  .topbar {
+    background: var(--bg-mantle);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .topbar .logo { color: var(--blue); font-weight: 700; font-size: 13px; }
+  .topbar .repo { color: var(--fg-dim); }
+  .topbar .branch { color: var(--mauve); }
+  .topbar .keys { margin-left: auto; color: var(--fg-muted); font-size: 11px; }
+  .topbar .keys kbd {
+    background: var(--overlay); border: 1px solid var(--border); border-radius: 3px;
+    padding: 1px 5px; font-size: 10px; color: var(--yellow); margin: 0 1px;
+  }
+
+  /* ─── Main layout ─── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ─── Left rail ─── */
+  .left-rail {
+    width: 300px; min-width: 260px;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--bg-surface); flex-shrink: 0;
+  }
+
+  /* ── Navigator (top pane) ── */
+  .navigator {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* rows shared */
+  .nav-row {
+    padding: 4px 10px; cursor: pointer; display: flex; align-items: center;
+    gap: 5px; user-select: none; transition: background 0.1s; font-size: 12px;
+    border-left: 3px solid transparent; min-height: 22px;
+  }
+  .nav-row:hover { background: var(--selection); }
+  .nav-row.active { background: var(--active); border-left-color: var(--blue); }
+  .nav-row .expand { width: 12px; text-align: center; color: var(--fg-dim); font-size: 10px; flex-shrink: 0; }
+
+  /* unit rows */
+  .nav-row.unit .icon { flex-shrink: 0; font-size: 11px; }
+  .nav-row.unit .icon.gb { color: var(--mauve); }
+  .nav-row.unit .icon.pr { color: var(--green); }
+  .nav-row.unit .icon.un { color: var(--fg-muted); }
+  .nav-row .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav-row .pr-id { color: var(--fg-dim); font-size: 11px; }
+  .nav-row .progress { color: var(--fg-dim); font-size: 11px; white-space: nowrap; }
+  .nav-row .base-ref {
+    font-size: 10px; color: var(--teal); background: rgba(148,226,213,0.1);
+    padding: 1px 5px; border-radius: 3px; cursor: pointer; flex-shrink: 0;
+  }
+  .nav-row .base-ref:hover { background: rgba(148,226,213,0.25); }
+
+  /* commit rows */
+  .nav-row.commit { padding-left: 32px; color: var(--fg-dim); }
+  .nav-row.commit.active { color: var(--fg); }
+  .nav-row.commit .sha { color: var(--yellow); font-size: 11px; flex-shrink: 0; width: 56px; }
+  .nav-row.commit .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-row.commit .author { color: var(--fg-muted); font-size: 11px; flex-shrink: 0; }
+
+  /* separator rows */
+  .nav-sep {
+    padding: 6px 10px 2px; font-size: 11px; color: var(--fg-muted);
+    user-select: none; display: flex; align-items: center; gap: 6px;
+    border-top: 1px solid var(--border); margin-top: 2px;
+  }
+  .nav-sep .sep-label { font-weight: 600; }
+  .nav-sep .sep-toggle {
+    margin-left: auto; font-size: 10px; color: var(--blue);
+    cursor: pointer; background: rgba(137,180,250,0.1);
+    border: 1px solid rgba(137,180,250,0.2); border-radius: 3px; padding: 0 5px;
+  }
+  .nav-sep .sep-toggle:hover { background: rgba(137,180,250,0.2); }
+
+  /* dir headers */
+  .nav-row.dir { cursor: default; color: var(--fg-dim); padding-left: 10px; }
+  .nav-row.dir:hover { background: transparent; }
+  .nav-row.dir .dir-icon { color: var(--blue); font-size: 11px; }
+  .nav-row.dir .dir-name { font-weight: 600; }
+  .nav-row.dir .dir-agg { margin-left: auto; font-size: 10px; color: var(--fg-muted); }
+
+  /* file rows */
+  .nav-row.file { padding-left: 24px; }
+  .nav-row.file.reviewed { color: var(--reviewed-fg); }
+  .nav-row.file.reviewed .filename { text-decoration: line-through; text-decoration-color: var(--fg-muted); }
+  .nav-row .status { width: 12px; text-align: center; font-weight: 700; flex-shrink: 0; font-size: 12px; }
+  .nav-row .status.mod { color: var(--yellow); }
+  .nav-row .status.add { color: var(--green); }
+  .nav-row .status.del { color: var(--red); }
+  .nav-row .status.ren { color: var(--blue); }
+  .nav-row .devicon { width: 14px; text-align: center; flex-shrink: 0; font-size: 11px; }
+  .nav-row .filename { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav-row .note-badge {
+    font-size: 10px; color: var(--peach); background: rgba(250,179,135,0.15);
+    padding: 0 5px; border-radius: 8px; flex-shrink: 0;
+  }
+  .nav-row .check { color: var(--green); font-size: 11px; flex-shrink: 0; }
+  .nav-row .dir-suffix { color: var(--fg-muted); font-size: 11px; margin-left: 4px; }
+
+  /* ── Threads (bottom pane) ── */
+  .threads {
+    flex: 0 0 auto; min-height: 100px; max-height: 40%;
+    overflow-y: auto; overflow-x: hidden;
+  }
+  .threads-header {
+    padding: 6px 10px 2px; font-size: 11px; color: var(--fg-muted);
+    text-transform: uppercase; letter-spacing: 0.5px; user-select: none;
+    position: sticky; top: 0; background: var(--bg-surface); z-index: 1;
+    border-bottom: 1px solid rgba(69,71,90,0.4);
+  }
+  .thread-group {
+    padding: 4px 10px 2px 14px; font-size: 11px; user-select: none;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .thread-group.vendor { color: var(--lavender); }
+  .thread-group.local-g { color: var(--green); }
+  .thread-group.stale { color: var(--fg-muted); }
+  .thread-row {
+    padding: 3px 10px 3px 28px; cursor: pointer; display: flex;
+    align-items: center; gap: 6px; font-size: 12px; user-select: none;
+    transition: background 0.1s;
+  }
+  .thread-row:hover { background: var(--selection); }
+  .thread-row .t-file { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-row .t-count { font-size: 11px; flex-shrink: 0; }
+  .thread-row .t-count.remote { color: var(--lavender); }
+  .thread-row .t-count.local-c { color: var(--green); }
+  .thread-row .t-count.stale { color: var(--fg-muted); }
+
+  /* ─── Diff viewer ─── */
+  .diff-viewer {
+    flex: 1; overflow: hidden; background: var(--bg);
+    display: flex; flex-direction: column;
+  }
+  .diff-file-header {
+    padding: 8px 16px; background: var(--bg-mantle);
+    border-bottom: 1px solid var(--border); font-size: 12px;
+    display: flex; align-items: center; gap: 8px;
+    position: sticky; top: 0; z-index: 2; flex-shrink: 0;
+  }
+  .diff-file-header .filepath { color: var(--blue); }
+  .diff-file-header .stats { margin-left: auto; }
+  .diff-file-header .stats .a { color: var(--green); }
+  .diff-file-header .stats .d { color: var(--red); }
+  .diff-content { flex: 1; overflow-y: auto; }
+  .diff-hunk-header {
+    padding: 4px 16px; background: rgba(137,180,250,0.07);
+    color: var(--blue); font-size: 12px;
+    border-top: 1px solid var(--border); user-select: none;
+  }
+  .diff-line { display: flex; font-size: 12.5px; line-height: 1.6; min-height: 22px; }
+  .diff-line .gutter {
+    width: 52px; text-align: right; padding-right: 8px;
+    color: var(--fg-muted); font-size: 11px; user-select: none;
+    flex-shrink: 0; display: flex; justify-content: flex-end;
+  }
+  .diff-line .gutter .ln { width: 24px; text-align: right; }
+  .diff-line .code { flex: 1; padding: 0 16px 0 8px; white-space: pre; tab-size: 4; }
+  .diff-line.add { background: rgba(166,227,161,0.08); }
+  .diff-line.add .code { color: var(--green); }
+  .diff-line.del { background: rgba(243,139,168,0.08); }
+  .diff-line.del .code { color: var(--red); }
+  .diff-line.context .code { color: var(--fg-dim); }
+
+  .diff-note-inline {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 16px 6px 62px; background: var(--note-bg);
+    border-left: 3px solid var(--peach); font-size: 12px; margin: 2px 0;
+  }
+  .diff-note-inline .note-avatar {
+    width: 20px; height: 20px; border-radius: 50%; background: var(--overlay);
+    color: var(--peach); display: flex; align-items: center; justify-content: center;
+    font-size: 10px; flex-shrink: 0;
+  }
+  .diff-note-inline .note-body { flex: 1; }
+  .diff-note-inline .note-meta { font-size: 10px; color: var(--fg-muted); margin-bottom: 2px; }
+  .diff-note-inline .note-msg { color: var(--fg); }
+
+  /* ─── Popups ─── */
+  .popup-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .popup-overlay.visible { display: flex; }
+  .popup {
+    background: var(--popup-bg); border: 1px solid var(--popup-border);
+    border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    width: 620px; max-height: 420px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .popup-header {
+    padding: 10px 14px; background: var(--bg-mantle);
+    border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; gap: 10px; font-size: 12px;
+  }
+  .popup-header .popup-title { color: var(--blue); font-weight: 600; }
+  .popup-header .popup-file { color: var(--fg-dim); flex: 1; }
+  .popup-header .popup-close {
+    cursor: pointer; color: var(--fg-muted); font-size: 14px;
+    width: 22px; height: 22px; display: flex; align-items: center;
+    justify-content: center; border-radius: 4px;
+  }
+  .popup-header .popup-close:hover { background: var(--overlay); color: var(--red); }
+  .popup-toggle-bar {
+    padding: 4px 14px; background: var(--bg-surface);
+    border-bottom: 1px solid var(--border); display: flex; gap: 6px; font-size: 11px;
+  }
+  .popup-toggle-bar .ref-toggle {
+    cursor: pointer; padding: 2px 10px; border-radius: 4px;
+    color: var(--fg-dim); border: 1px solid transparent; transition: all 0.15s;
+  }
+  .popup-toggle-bar .ref-toggle.active {
+    color: var(--teal); background: rgba(148,226,213,0.1);
+    border-color: rgba(148,226,213,0.3);
+  }
+  .popup-toggle-bar .ref-toggle:hover { color: var(--fg); }
+  .popup-body { flex: 1; overflow-y: auto; }
+
+  .blame-line {
+    display: flex; font-size: 12px; line-height: 1.7; padding: 0 14px;
+    border-bottom: 1px solid rgba(69,71,90,0.3);
+  }
+  .blame-line .blame-info {
+    width: 260px; flex-shrink: 0; display: flex; gap: 8px;
+    color: var(--fg-muted); font-size: 11px; align-items: center; overflow: hidden;
+  }
+  .blame-line .blame-sha { color: var(--yellow); width: 58px; flex-shrink: 0; }
+  .blame-line .blame-author { color: var(--mauve); width: 80px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .blame-line .blame-date { color: var(--fg-muted); width: 80px; flex-shrink: 0; }
+  .blame-line .blame-code {
+    flex: 1; white-space: pre; padding-left: 10px;
+    border-left: 1px solid var(--border); color: var(--fg-dim);
+  }
+
+  .log-entry {
+    padding: 8px 14px; border-bottom: 1px solid rgba(69,71,90,0.3);
+    cursor: pointer; transition: background 0.1s;
+  }
+  .log-entry:hover { background: var(--selection); }
+  .log-entry .log-header { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  .log-entry .log-sha { color: var(--yellow); font-size: 11px; }
+  .log-entry .log-msg { color: var(--fg); flex: 1; }
+  .log-entry .log-date { color: var(--fg-muted); font-size: 11px; }
+  .log-entry .log-author { color: var(--mauve); font-size: 11px; margin-top: 2px; }
+  .log-entry .log-stats { color: var(--fg-muted); font-size: 11px; margin-top: 2px; }
+  .log-entry .log-stats .a { color: var(--green); }
+  .log-entry .log-stats .d { color: var(--red); }
+
+  /* Change-base modal */
+  .base-modal { width: 400px; max-height: 320px; }
+  .base-modal .popup-body { padding: 12px 14px; }
+  .base-input {
+    width: 100%; background: var(--bg-mantle); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 10px; color: var(--fg);
+    font-family: inherit; font-size: 12px; outline: none; margin-bottom: 8px;
+  }
+  .base-input:focus { border-color: var(--blue); }
+  .ref-list { list-style: none; }
+  .ref-list li {
+    padding: 5px 8px; cursor: pointer; border-radius: 4px; font-size: 12px;
+    display: flex; align-items: center; gap: 6px; transition: background 0.1s;
+  }
+  .ref-list li:hover { background: var(--selection); }
+  .ref-list li .ref-type { color: var(--fg-muted); font-size: 10px; width: 44px; }
+  .ref-list li .ref-name { color: var(--fg); }
+  .ref-list li .ref-sha { color: var(--yellow); font-size: 11px; margin-left: auto; }
+  .ref-list li.current { background: rgba(148,226,213,0.1); }
+  .ref-list li.current .ref-name { color: var(--teal); }
+
+  /* ─── Status bar ─── */
+  .statusbar {
+    background: var(--bg-mantle); border-top: 1px solid var(--border);
+    padding: 4px 16px; font-size: 11px; color: var(--fg-muted);
+    display: flex; gap: 20px; flex-shrink: 0;
+  }
+  .statusbar .mode { color: var(--blue); font-weight: 600; }
+  .statusbar .notes-count { color: var(--peach); }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--overlay); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+</style>
+</head>
+<body>
+
+<!-- ━━━ Top bar ━━━ -->
+<div class="topbar">
+  <span class="logo">⎆ review.nvim</span>
+  <span class="repo">~/dev/review.nvim</span>
+  <span class="branch">⎇ gitbutler/workspace</span>
+  <span class="keys">
+    <kbd>T</kbd> cycle units
+    <kbd>t</kbd> tree/flat
+    <kbd>b</kbd> blame
+    <kbd>L</kbd> file log
+    <kbd>?</kbd> help
+  </span>
+</div>
+
+<!-- ━━━ Main layout ━━━ -->
+<div class="main">
+  <div class="left-rail">
+    <!-- Top pane: Navigator (units + commits + files in one buffer) -->
+    <div class="navigator" id="navigator"></div>
+
+    <!-- Bottom pane: Threads -->
+    <div class="threads" id="threads"></div>
+  </div>
+
+  <!-- Diff viewer -->
+  <div class="diff-viewer">
+    <div class="diff-file-header">
+      <span class="filepath" id="diffFilepath">lua/review/state.lua</span>
+      <span class="stats">
+        <span class="a" id="diffAdd">+24</span>
+        <span class="d" id="diffDel">-8</span>
+      </span>
+    </div>
+    <div class="diff-content" id="diffContent"></div>
+  </div>
+</div>
+
+<!-- ━━━ Status bar ━━━ -->
+<div class="statusbar">
+  <span class="mode">REVIEW</span>
+  <span id="sbUnit">feature-auth-cache (#42)</span>
+  <span id="sbBase">base: main</span>
+  <span class="notes-count" id="sbNotes">📝 5 notes</span>
+  <span id="sbProgress">3/7 files reviewed</span>
+  <span style="margin-left:auto">read-only</span>
+</div>
+
+<!-- ━━━ Blame popup ━━━ -->
+<div class="popup-overlay" id="blameOverlay">
+  <div class="popup">
+    <div class="popup-header">
+      <span class="popup-title">Blame</span>
+      <span class="popup-file">lua/review/state.lua:38-55</span>
+      <span class="popup-close" onclick="closePopup('blameOverlay')">✕</span>
+    </div>
+    <div class="popup-toggle-bar">
+      <span class="ref-toggle active" id="blameBase" onclick="toggleBlameRef('base')">base (main)</span>
+      <span class="ref-toggle" id="blameHead" onclick="toggleBlameRef('head')">head (feature-auth-cache)</span>
+    </div>
+    <div class="popup-body" id="blameBody"></div>
+  </div>
+</div>
+
+<!-- ━━━ File history popup ━━━ -->
+<div class="popup-overlay" id="logOverlay">
+  <div class="popup" style="width:580px; max-height:450px;">
+    <div class="popup-header">
+      <span class="popup-title">File History</span>
+      <span class="popup-file">git log --follow -- lua/review/state.lua</span>
+      <span class="popup-close" onclick="closePopup('logOverlay')">✕</span>
+    </div>
+    <div class="popup-body" id="logBody"></div>
+  </div>
+</div>
+
+<!-- ━━━ Change base modal ━━━ -->
+<div class="popup-overlay" id="baseOverlay">
+  <div class="popup base-modal">
+    <div class="popup-header">
+      <span class="popup-title">Change Base Ref</span>
+      <span class="popup-file" id="baseUnitLabel">feature-auth-cache (#42)</span>
+      <span class="popup-close" onclick="closePopup('baseOverlay')">✕</span>
+    </div>
+    <div class="popup-body">
+      <input class="base-input" id="baseInput" placeholder="Search refs… (branch, tag, SHA)">
+      <ul class="ref-list" id="refList"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════════════════════
+
+const units = [
+  {
+    id: 'auth-cache', label: 'feature-auth-cache', prId: '#42',
+    type: 'gb', icon: '⎇', baseRef: 'main',
+    reviewed: 3, total: 7, noteCount: 5, expanded: true, active: true,
+    commits: [
+      { sha: 'abc1234', msg: 'fix login flow edge case', author: 'agent-a' },
+      { sha: 'def5678', msg: 'add session cache layer', author: 'agent-a' },
+      { sha: 'gh90abc', msg: 'update auth middleware', author: 'psanchez' },
+    ],
+    files: {
+      'lua/review/': [
+        { name: 'state.lua', status: '~', notes: 2, reviewed: false, icon: '🌙' },
+        { name: 'ui.lua', status: '~', notes: 1, reviewed: false, icon: '🌙' },
+        { name: 'auth.lua', status: '+', notes: 0, reviewed: true, icon: '🌙' },
+        { name: 'cache.lua', status: '+', notes: 1, reviewed: false, icon: '🌙' },
+      ],
+      'src/': [
+        { name: 'session.rs', status: '~', notes: 1, reviewed: true, icon: '🦀' },
+        { name: 'middleware.rs', status: '~', notes: 0, reviewed: true, icon: '🦀' },
+      ],
+      './': [
+        { name: 'README.md', status: '~', notes: 0, reviewed: false, icon: '📄' },
+      ],
+    }
+  },
+  {
+    id: 'perf-opt', label: 'perf-optimization', prId: '#43',
+    type: 'pr', icon: '⊙', baseRef: 'main',
+    reviewed: 1, total: 3, noteCount: 2, expanded: false, active: false,
+    commits: [
+      { sha: 'x1y2z3a', msg: 'batch render calls', author: 'agent-b' },
+      { sha: 'b4c5d6e', msg: 'lazy load explorer', author: 'agent-b' },
+    ],
+    files: {
+      'lua/review/': [
+        { name: 'render.lua', status: '~', notes: 1, reviewed: false, icon: '🌙' },
+        { name: 'explorer.lua', status: '~', notes: 1, reviewed: true, icon: '🌙' },
+        { name: 'perf.lua', status: '+', notes: 0, reviewed: false, icon: '🌙' },
+      ]
+    }
+  },
+  {
+    id: 'unassigned', label: 'unassigned', prId: '',
+    type: 'unassigned', icon: '◌', baseRef: 'HEAD',
+    reviewed: 0, total: 1, noteCount: 0, expanded: false, active: false,
+    commits: [],
+    files: { './': [{ name: '.gitignore', status: '~', notes: 0, reviewed: false, icon: '⚙' }] }
+  },
+];
+
+const threadData = [
+  {
+    group: 'github/', groupClass: 'vendor',
+    rows: [
+      { file: 'state.lua', count: 2, countClass: 'remote' },
+      { file: 'ui.lua', count: 1, countClass: 'remote' },
+    ]
+  },
+  {
+    group: 'local/', groupClass: 'local-g',
+    rows: [
+      { file: 'cache.lua', count: 1, countClass: 'local-c' },
+      { file: 'session.rs', count: 1, countClass: 'local-c' },
+    ]
+  },
+  {
+    group: 'Stale', groupClass: 'stale',
+    rows: [
+      { file: 'old_pane.lua', count: 1, countClass: 'stale' },
+    ]
+  },
+];
+
+const diffLines = [
+  { type: 'context', old: 38, new: 38, code: 'local M = {}' },
+  { type: 'context', old: 39, new: 39, code: '' },
+  { type: 'context', old: 40, new: 40, code: '--- Session singleton' },
+  { type: 'del',     old: 41, code: 'local session = nil' },
+  { type: 'add',     new: 41, code: '--- Tab-keyed session registry (US-32)' },
+  { type: 'add',     new: 42, code: 'local sessions = {}' },
+  { type: 'add',     new: 43, code: '' },
+  { type: 'add',     new: 44, code: '--- Get session for current tab' },
+  { type: 'add',     new: 45, code: 'local function get_session()' },
+  { type: 'add',     new: 46, code: '  local tab = vim.api.nvim_get_current_tabpage()' },
+  { type: 'add',     new: 47, code: '  return sessions[tab]' },
+  { type: 'add',     new: 48, code: 'end' },
+  { type: 'context', old: 42, new: 49, code: '' },
+  { type: 'context', old: 43, new: 50, code: '--- Initialize a review session' },
+  { type: 'del',     old: 44, code: 'function M.init(opts)' },
+  { type: 'add',     new: 51, code: 'function M.init(opts, tab)' },
+  { type: 'add',     new: 52, code: '  tab = tab or vim.api.nvim_get_current_tabpage()' },
+  { type: 'context', old: 45, new: 53, code: '  local repo_root = git.find_root()' },
+  { type: 'context', old: 46, new: 54, code: '  if not repo_root then' },
+  { type: 'context', old: 47, new: 55, code: '    vim.notify("Not in a git repo", vim.log.levels.ERROR)' },
+  { type: 'context', old: 48, new: 56, code: '    return nil' },
+  { type: 'context', old: 49, new: 57, code: '  end' },
+  { type: 'note', author: 'psanchez', text: 'Should we also store the repo_root per session so multi-repo tabs work correctly?' },
+  { type: 'context', old: 50, new: 58, code: '' },
+  { type: 'del',     old: 51, code: '  session = {' },
+  { type: 'add',     new: 59, code: '  sessions[tab] = {' },
+  { type: 'context', old: 52, new: 60, code: '    repo_root = repo_root,' },
+  { type: 'del',     old: 53, code: '    branch = git.current_branch(),' },
+  { type: 'add',     new: 61, code: '    units = {},' },
+  { type: 'add',     new: 62, code: '    active_unit = nil,' },
+  { type: 'add',     new: 63, code: '    active_commit = nil,  -- nil = show all' },
+  { type: 'context', old: 54, new: 64, code: '    notes = {},' },
+  { type: 'note', author: 'psanchez', text: 'note_index_by_location needs to become a list-per-key for US-11 multi-note support' },
+  { type: 'context', old: 55, new: 65, code: '    note_index_by_location = {},' },
+];
+
+const blameBase = [
+  { sha: 'e2f3a1b', author: 'jdoe',     date: '2025-12-10', code: 'local M = {}' },
+  { sha: 'e2f3a1b', author: 'jdoe',     date: '2025-12-10', code: '' },
+  { sha: 'e2f3a1b', author: 'jdoe',     date: '2025-12-10', code: '--- Session singleton' },
+  { sha: 'e2f3a1b', author: 'jdoe',     date: '2025-12-10', code: 'local session = nil' },
+  { sha: 'e2f3a1b', author: 'jdoe',     date: '2025-12-10', code: '' },
+  { sha: 'a9c0d2e', author: 'psanchez', date: '2026-01-15', code: '--- Initialize a review session' },
+  { sha: 'a9c0d2e', author: 'psanchez', date: '2026-01-15', code: 'function M.init(opts)' },
+  { sha: 'a9c0d2e', author: 'psanchez', date: '2026-01-15', code: '  local repo_root = git.find_root()' },
+  { sha: 'b7d8e9f', author: 'agent-a',  date: '2026-03-22', code: '  if not repo_root then' },
+  { sha: 'b7d8e9f', author: 'agent-a',  date: '2026-03-22', code: '    vim.notify(...)' },
+  { sha: 'b7d8e9f', author: 'agent-a',  date: '2026-03-22', code: '    return nil' },
+  { sha: 'b7d8e9f', author: 'agent-a',  date: '2026-03-22', code: '  end' },
+];
+const blameHead = [
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: 'local M = {}' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '--- Tab-keyed session registry' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: 'local sessions = {}' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '--- Get session for current tab' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: 'local function get_session()' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '  local tab = vim.api...' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: '  return sessions[tab]' },
+  { sha: 'abc1234', author: 'agent-a',  date: '2026-05-12', code: 'end' },
+  { sha: 'a9c0d2e', author: 'psanchez', date: '2026-01-15', code: '' },
+  { sha: 'gh90abc', author: 'psanchez', date: '2026-05-13', code: '--- Initialize a review session' },
+];
+
+const logEntries = [
+  { sha: 'gh90abc', msg: 'update auth middleware and session init', author: 'psanchez', date: '2026-05-13', add: 24, del: 8 },
+  { sha: 'def5678', msg: 'add session cache layer', author: 'agent-a', date: '2026-05-12', add: 48, del: 3 },
+  { sha: 'abc1234', msg: 'fix login flow edge case', author: 'agent-a', date: '2026-05-12', add: 12, del: 5 },
+  { sha: 'b7d8e9f', msg: 'add error handling for missing repo root', author: 'agent-a', date: '2026-03-22', add: 4, del: 1 },
+  { sha: 'a9c0d2e', msg: 'refactor session init to use opts pattern', author: 'psanchez', date: '2026-01-15', add: 15, del: 22 },
+  { sha: 'e2f3a1b', msg: 'initial state module with singleton session', author: 'jdoe', date: '2025-12-10', add: 89, del: 0 },
+];
+
+const refOptions = [
+  { type: 'branch', name: 'main', sha: 'f1a2b3c' },
+  { type: 'branch', name: 'develop', sha: 'd4e5f6a' },
+  { type: 'branch', name: 'feature-auth-cache', sha: 'gh90abc' },
+  { type: 'branch', name: 'perf-optimization', sha: 'b4c5d6e' },
+  { type: 'tag',    name: 'v0.9.0', sha: '1a2b3c4' },
+  { type: 'tag',    name: 'v0.8.2', sha: '5d6e7f8' },
+  { type: 'sha',    name: 'e2f3a1b', sha: 'e2f3a1b' },
+];
+
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let treeMode = true;
+let activeUnitId = 'auth-cache';
+let activeCommitSha = null;
+let activeFile = 'state.lua';
+let blameRef = 'base';
+
+// ═══════════════════════════════════════════════════════
+// RENDERERS
+// ═══════════════════════════════════════════════════════
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderNavigator() {
+  const el = document.getElementById('navigator');
+  el.innerHTML = '';
+  const unit = units.find(u => u.id === activeUnitId);
+
+  units.forEach(u => {
+    // unit row
+    const r = document.createElement('div');
+    r.className = 'nav-row unit' + (u.id === activeUnitId ? ' active' : '');
+    const exp = u.commits.length ? (u.expanded ? '▾' : '▸') : ' ';
+    const tc = u.type === 'gb' ? 'gb' : u.type === 'pr' ? 'pr' : 'un';
+    r.innerHTML = `
+      <span class="expand">${exp}</span>
+      <span class="icon ${tc}">${u.icon}</span>
+      <span class="label">${u.label}</span>
+      ${u.prId ? `<span class="pr-id">${u.prId}</span>` : ''}
+      <span class="base-ref" title="Change base ref" onclick="event.stopPropagation(); openBaseModal('${u.id}')">${u.baseRef}</span>
+      <span class="progress">${u.reviewed}/${u.total}</span>
+    `;
+    r.addEventListener('click', () => {
+      if (u.commits.length) u.expanded = !u.expanded;
+      activeUnitId = u.id; activeCommitSha = null; renderAll();
+    });
+    el.appendChild(r);
+
+    // commits (if expanded)
+    if (u.expanded && u.commits.length) {
+      u.commits.forEach((c, i) => {
+        const cr = document.createElement('div');
+        cr.className = 'nav-row commit' + (c.sha === activeCommitSha ? ' active' : '');
+        const g = i === u.commits.length - 1 ? '└' : '├';
+        cr.innerHTML = `
+          <span class="expand">${g}</span>
+          <span class="sha">${c.sha.slice(0,7)}</span>
+          <span class="msg">${c.msg}</span>
+          <span class="author">${c.author}</span>
+        `;
+        cr.addEventListener('click', () => {
+          activeUnitId = u.id;
+          activeCommitSha = c.sha === activeCommitSha ? null : c.sha;
+          renderAll();
+        });
+        el.appendChild(cr);
+      });
+    }
+  });
+
+  // ── Files separator ──
+  if (!unit) return;
+  const sep = document.createElement('div');
+  sep.className = 'nav-sep';
+  sep.innerHTML = `
+    <span class="sep-label">Files [${unit.reviewed}/${unit.total} reviewed]</span>
+    <span class="sep-toggle" id="treeToggle" title="Toggle tree ↔ flat">${treeMode ? '🌳 tree' : '≡ flat'}</span>
+  `;
+  el.appendChild(sep);
+  document.getElementById('treeToggle').addEventListener('click', (e) => {
+    e.stopPropagation(); treeMode = !treeMode; renderAll();
+  });
+
+  // ── File rows ──
+  if (treeMode) {
+    for (const [dir, files] of Object.entries(unit.files)) {
+      // dir header
+      const dr = document.createElement('div');
+      dr.className = 'nav-row dir';
+      const dn = files.reduce((s,f) => s + f.notes, 0);
+      const drev = files.filter(f => f.reviewed).length;
+      dr.innerHTML = `
+        <span class="dir-icon">📁</span>
+        <span class="dir-name">${dir}</span>
+        <span class="dir-agg">${drev}/${files.length}${dn ? ' · '+dn+' notes' : ''}</span>
+      `;
+      el.appendChild(dr);
+
+      files.forEach(f => {
+        const fr = document.createElement('div');
+        fr.className = 'nav-row file' + (f.name === activeFile ? ' active' : '') + (f.reviewed ? ' reviewed' : '');
+        const sc = f.status === '~' ? 'mod' : f.status === '+' ? 'add' : f.status === '-' ? 'del' : 'ren';
+        fr.innerHTML = `
+          <span class="status ${sc}">${f.status}</span>
+          <span class="devicon">${f.icon}</span>
+          <span class="filename">${f.name}</span>
+          ${f.notes ? `<span class="note-badge">(${f.notes})</span>` : ''}
+          ${f.reviewed ? '<span class="check">✓</span>' : ''}
+        `;
+        fr.addEventListener('click', () => { activeFile = f.name; renderAll(); });
+        el.appendChild(fr);
+      });
+    }
+  } else {
+    // flat mode
+    const all = [];
+    for (const [dir, files] of Object.entries(unit.files)) {
+      files.forEach(f => all.push({ ...f, dir }));
+    }
+    all.sort((a,b) => a.name.localeCompare(b.name));
+    all.forEach(f => {
+      const fr = document.createElement('div');
+      fr.className = 'nav-row file' + (f.name === activeFile ? ' active' : '') + (f.reviewed ? ' reviewed' : '');
+      fr.style.paddingLeft = '10px';
+      const sc = f.status === '~' ? 'mod' : f.status === '+' ? 'add' : f.status === '-' ? 'del' : 'ren';
+      fr.innerHTML = `
+        <span class="status ${sc}">${f.status}</span>
+        <span class="devicon">${f.icon}</span>
+        <span class="filename">${f.name}</span>
+        <span class="dir-suffix">${f.dir}</span>
+        ${f.notes ? `<span class="note-badge">(${f.notes})</span>` : ''}
+        ${f.reviewed ? '<span class="check">✓</span>' : ''}
+      `;
+      fr.addEventListener('click', () => { activeFile = f.name; renderAll(); });
+      el.appendChild(fr);
+    });
+  }
+}
+
+function renderThreads() {
+  const el = document.getElementById('threads');
+  el.innerHTML = '<div class="threads-header">Threads</div>';
+  threadData.forEach(g => {
+    const gh = document.createElement('div');
+    gh.className = 'thread-group ' + g.groupClass;
+    gh.textContent = g.group;
+    el.appendChild(gh);
+    g.rows.forEach(r => {
+      const tr = document.createElement('div');
+      tr.className = 'thread-row';
+      tr.innerHTML = `
+        <span class="t-file">${r.file}</span>
+        <span class="t-count ${r.countClass}">[${r.count}]</span>
+      `;
+      el.appendChild(tr);
+    });
+  });
+}
+
+function renderDiff() {
+  const dc = document.getElementById('diffContent');
+  dc.innerHTML = '';
+  const hh = document.createElement('div');
+  hh.className = 'diff-hunk-header';
+  hh.textContent = '@@ -38,18 +38,28 @@ local function init_session(opts)';
+  dc.appendChild(hh);
+
+  diffLines.forEach(line => {
+    if (line.type === 'note') {
+      const n = document.createElement('div');
+      n.className = 'diff-note-inline';
+      n.innerHTML = `
+        <div class="note-avatar">📝</div>
+        <div class="note-body">
+          <div class="note-meta">${line.author} · just now</div>
+          <div class="note-msg">${line.text}</div>
+        </div>
+      `;
+      dc.appendChild(n);
+      return;
+    }
+    const dl = document.createElement('div');
+    dl.className = 'diff-line ' + line.type;
+    const p = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+    dl.innerHTML = `
+      <div class="gutter">
+        <span class="ln">${line.old ?? ''}</span>
+        <span class="ln">${line.new ?? ''}</span>
+      </div>
+      <div class="code">${p} ${esc(line.code)}</div>
+    `;
+    dc.appendChild(dl);
+  });
+}
+
+function renderBlame() {
+  const data = blameRef === 'base' ? blameBase : blameHead;
+  const el = document.getElementById('blameBody');
+  el.innerHTML = '';
+  data.forEach(b => {
+    const bl = document.createElement('div');
+    bl.className = 'blame-line';
+    bl.innerHTML = `
+      <div class="blame-info">
+        <span class="blame-sha">${b.sha}</span>
+        <span class="blame-author">${b.author}</span>
+        <span class="blame-date">${b.date}</span>
+      </div>
+      <div class="blame-code">${esc(b.code)}</div>
+    `;
+    el.appendChild(bl);
+  });
+}
+
+function renderLog() {
+  const el = document.getElementById('logBody');
+  el.innerHTML = '';
+  logEntries.forEach(e => {
+    const le = document.createElement('div');
+    le.className = 'log-entry';
+    le.innerHTML = `
+      <div class="log-header">
+        <span class="log-sha">${e.sha}</span>
+        <span class="log-msg">${e.msg}</span>
+        <span class="log-date">${e.date}</span>
+      </div>
+      <div class="log-author">${e.author}</div>
+      <div class="log-stats"><span class="a">+${e.add}</span> <span class="d">-${e.del}</span></div>
+    `;
+    el.appendChild(le);
+  });
+}
+
+function renderRefList(filter = '') {
+  const list = document.getElementById('refList');
+  list.innerHTML = '';
+  const unit = units.find(u => u.id === activeUnitId);
+  const cur = unit ? unit.baseRef : 'main';
+  refOptions
+    .filter(r => !filter || r.name.toLowerCase().includes(filter.toLowerCase()))
+    .forEach(r => {
+      const li = document.createElement('li');
+      li.className = r.name === cur ? 'current' : '';
+      li.innerHTML = `
+        <span class="ref-type">${r.type}</span>
+        <span class="ref-name">${r.name}</span>
+        <span class="ref-sha">${r.sha.slice(0,7)}</span>
+      `;
+      li.addEventListener('click', () => {
+        if (unit) { unit.baseRef = r.name; renderAll(); closePopup('baseOverlay'); }
+      });
+      list.appendChild(li);
+    });
+}
+
+// ═══════════════════════════════════════════════════════
+// INTERACTIONS
+// ═══════════════════════════════════════════════════════
+
+function toggleBlameRef(ref) {
+  blameRef = ref;
+  document.getElementById('blameBase').className = 'ref-toggle' + (ref === 'base' ? ' active' : '');
+  document.getElementById('blameHead').className = 'ref-toggle' + (ref === 'head' ? ' active' : '');
+  renderBlame();
+}
+
+function openPopup(id) {
+  document.getElementById(id).classList.add('visible');
+  if (id === 'blameOverlay') renderBlame();
+  if (id === 'logOverlay') renderLog();
+}
+function closePopup(id) { document.getElementById(id).classList.remove('visible'); }
+
+function openBaseModal(unitId) {
+  activeUnitId = unitId;
+  const u = units.find(u => u.id === unitId);
+  document.getElementById('baseUnitLabel').textContent = u ? `${u.label}${u.prId ? ' ('+u.prId+')' : ''}` : '';
+  document.getElementById('baseInput').value = '';
+  renderRefList();
+  openPopup('baseOverlay');
+  setTimeout(() => document.getElementById('baseInput').focus(), 50);
+}
+
+document.querySelectorAll('.popup-overlay').forEach(el => {
+  el.addEventListener('click', (e) => { if (e.target === el) el.classList.remove('visible'); });
+});
+document.getElementById('baseInput').addEventListener('input', (e) => { renderRefList(e.target.value); });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.popup-overlay.visible').forEach(el => el.classList.remove('visible'));
+    return;
+  }
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 't') { treeMode = !treeMode; renderAll(); return; }
+  if (e.key === 'b') { openPopup('blameOverlay'); return; }
+  if (e.key === 'L') { openPopup('logOverlay'); return; }
+  if (e.key === 'T') {
+    const idx = units.findIndex(u => u.id === activeUnitId);
+    activeUnitId = units[(idx + 1) % units.length].id;
+    activeCommitSha = null; renderAll(); return;
+  }
+});
+
+function renderAll() {
+  renderNavigator();
+  renderThreads();
+  renderDiff();
+  const u = units.find(u => u.id === activeUnitId);
+  if (u) {
+    document.getElementById('sbUnit').textContent = u.label + (u.prId ? ' ('+u.prId+')' : '');
+    document.getElementById('sbBase').textContent = 'base: ' + u.baseRef;
+    document.getElementById('sbNotes').textContent = '📝 ' + u.noteCount + ' notes';
+    document.getElementById('sbProgress').textContent = u.reviewed + '/' + u.total + ' files reviewed';
+  }
+}
+
+renderAll();
+</script>
+</body>
+</html>

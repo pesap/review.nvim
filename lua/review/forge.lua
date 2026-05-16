@@ -314,6 +314,59 @@ query {
           createdAt
         }
       }
+      timelineItems(first: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, MILESTONED_EVENT, DEMILESTONED_EVENT, REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, HEAD_REF_FORCE_PUSHED_EVENT]) {
+        nodes {
+          __typename
+          ... on LabeledEvent {
+            createdAt
+            actor { login }
+            label { name }
+          }
+          ... on UnlabeledEvent {
+            createdAt
+            actor { login }
+            label { name }
+          }
+          ... on MilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+          ... on DemilestonedEvent {
+            createdAt
+            actor { login }
+            milestoneTitle
+          }
+          ... on ReviewRequestedEvent {
+            createdAt
+            actor { login }
+            requestedReviewer {
+              ... on User { login }
+              ... on Team { name }
+            }
+          }
+          ... on ReadyForReviewEvent {
+            createdAt
+            actor { login }
+          }
+          ... on ClosedEvent {
+            createdAt
+            actor { login }
+          }
+          ... on ReopenedEvent {
+            createdAt
+            actor { login }
+          }
+          ... on MergedEvent {
+            createdAt
+            actor { login }
+          }
+          ... on HeadRefForcePushedEvent {
+            createdAt
+            actor { login }
+          }
+        }
+      }
     }
   }
 }]],
@@ -335,22 +388,29 @@ end
 
 --- Parse raw GitHub GraphQL response into comments.
 ---@param raw string  Raw JSON output
----@return table[] comments, string|nil err
+---@return table[] comments, string|nil err, table|nil summary
 local function parse_github_threads(raw)
   local ok, result = pcall(vim.fn.json_decode, raw)
   if not ok or not result or not result.data then
     return {}, "Failed to parse PR threads response"
   end
 
+  local pr = result.data.repository and result.data.repository.pullRequest
   local threads_data = result.data.repository
     and result.data.repository.pullRequest
     and result.data.repository.pullRequest.reviewThreads
     and result.data.repository.pullRequest.reviewThreads.nodes
   if not threads_data then
-    return {}, nil
+    return {}, nil, nil
   end
 
   local comments = {}
+  local summary = {
+    approvals = {},
+    changes_requested = {},
+    reviews = {},
+    timeline = {},
+  }
   for _, thread in ipairs(threads_data) do
     local nodes = thread.comments and thread.comments.nodes
     if not nodes or #nodes == 0 then
@@ -401,7 +461,6 @@ local function parse_github_threads(raw)
   end
 
   -- Parse general PR comments (not attached to code)
-  local pr = result.data.repository and result.data.repository.pullRequest
   local general_nodes = pr and pr.comments and pr.comments.nodes
   if general_nodes then
     for _, c in ipairs(general_nodes) do
@@ -432,6 +491,19 @@ local function parse_github_threads(raw)
   local review_nodes = pr and pr.reviews and pr.reviews.nodes
   if review_nodes then
     for _, r in ipairs(review_nodes) do
+      local review_entry = {
+        state = r.state,
+        author = r.author and r.author.login or "unknown",
+        body = r.body or "",
+        url = r.url,
+        created_at = r.createdAt,
+      }
+      table.insert(summary.reviews, review_entry)
+      if r.state == "APPROVED" then
+        table.insert(summary.approvals, review_entry)
+      elseif r.state == "CHANGES_REQUESTED" then
+        table.insert(summary.changes_requested, review_entry)
+      end
       if r.body and r.body ~= "" then
         local state_label = ""
         if r.state == "APPROVED" then
@@ -463,7 +535,45 @@ local function parse_github_threads(raw)
     end
   end
 
-  return comments, nil
+  local timeline_nodes = pr and pr.timelineItems and pr.timelineItems.nodes
+  if timeline_nodes then
+    for _, item in ipairs(timeline_nodes) do
+      local typename = item.__typename
+      local label
+      if typename == "LabeledEvent" and item.label then
+        label = "labeled " .. item.label.name
+      elseif typename == "UnlabeledEvent" and item.label then
+        label = "unlabeled " .. item.label.name
+      elseif typename == "MilestonedEvent" then
+        label = "milestoned " .. tostring(item.milestoneTitle or "")
+      elseif typename == "DemilestonedEvent" then
+        label = "removed milestone " .. tostring(item.milestoneTitle or "")
+      elseif typename == "ReviewRequestedEvent" then
+        local reviewer = item.requestedReviewer and (item.requestedReviewer.login or item.requestedReviewer.name)
+        label = "requested review from " .. tostring(reviewer or "unknown")
+      elseif typename == "ReadyForReviewEvent" then
+        label = "marked ready for review"
+      elseif typename == "ClosedEvent" then
+        label = "closed"
+      elseif typename == "ReopenedEvent" then
+        label = "reopened"
+      elseif typename == "MergedEvent" then
+        label = "merged"
+      elseif typename == "HeadRefForcePushedEvent" then
+        label = "force-pushed"
+      end
+      if label then
+        table.insert(summary.timeline, {
+          kind = typename,
+          label = label,
+          actor = item.actor and item.actor.login or "unknown",
+          created_at = item.createdAt,
+        })
+      end
+    end
+  end
+
+  return comments, nil, summary
 end
 
 --- Fetch existing review threads from a GitHub PR using GraphQL.
@@ -483,7 +593,7 @@ end
 ---@return table[] comments, string|nil err
 --- Parse raw GitLab discussions JSON into comments.
 ---@param raw string
----@return table[] comments, string|nil err
+---@return table[] comments, string|nil err, table|nil summary
 local function parse_gitlab_discussions(raw)
   local ok, disc_data = pcall(vim.fn.json_decode, raw)
   if not ok or type(disc_data) ~= "table" then
@@ -491,6 +601,12 @@ local function parse_gitlab_discussions(raw)
   end
 
   local comments = {}
+  local summary = {
+    approvals = {},
+    changes_requested = {},
+    reviews = {},
+    timeline = {},
+  }
   for _, disc in ipairs(disc_data) do
     if not disc.notes or #disc.notes == 0 then
       goto continue
@@ -526,7 +642,14 @@ local function parse_gitlab_discussions(raw)
         url = top.web_url,
         resolved = top.resolved or false,
       })
-    elseif not top.system then
+    elseif top.system then
+      table.insert(summary.timeline, {
+        kind = "SystemNote",
+        label = top.body or "",
+        actor = top.author and top.author.username or "unknown",
+        created_at = top.created_at,
+      })
+    else
       -- General MR comment (skip system notes)
       table.insert(comments, {
         file_path = nil,
@@ -542,7 +665,7 @@ local function parse_gitlab_discussions(raw)
     end
     ::continue::
   end
-  return comments, nil
+  return comments, nil, summary
 end
 
 local function gitlab_fetch(info)
@@ -590,7 +713,7 @@ function M.reply_to_pr(info, body)
   return nil, "Unknown forge: " .. info.forge
 end
 
----@param callback fun(comments: table[], err: string|nil)
+---@param callback fun(comments: table[], err: string|nil, summary: table|nil)
 function M.fetch_comments_async(info, callback)
   if info.forge == "github" then
     local json_input = vim.fn.json_encode({ query = github_threads_query(info) })
@@ -622,6 +745,9 @@ function M.fetch_comments_async(info, callback)
     callback({}, "Unknown forge: " .. info.forge)
   end
 end
+
+M._parse_github_threads = parse_github_threads
+M._parse_gitlab_discussions = parse_gitlab_discussions
 
 --- Reply to an existing thread on a GitHub PR.
 ---@param info table  Forge info from detect()
@@ -772,6 +898,12 @@ end
 ---@param ctx table  Context from resolve_context()
 ---@return string|nil url, string|nil err
 function M.post_comment(info, note, ctx)
+  if note.is_general or note.target_kind == "discussion" then
+    return M.reply_to_pr(info, note.body)
+  end
+  if not note.file_path or not note.line then
+    return nil, "no file/line target for remote review comment"
+  end
   if info.forge == "github" then
     return github_post(info, note, ctx)
   elseif info.forge == "gitlab" then

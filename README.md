@@ -6,34 +6,35 @@ Minimal code review plugin for Neovim.
 
 ## What it does
 
-- Dual-panel layout (file explorer + diff viewer) in its own tab
-- Embedded Fugitive status pane for worktree reviews
-- GitButler workspace detection with a read-only stack pane
+- Two-pane review layout in its own tab: navigator, threads, and diff
+- Read-only by default: no embedded staging, restore, commit, Fugitive, or GitButler mutation pane
+- GitButler workspace detection with virtual branches and unassigned changes as review units
 - Unified and side-by-side split views
 - Word-level diff highlighting
 - Explicit review scope modes: `All`, `Current Commit`, and `Select Commit`
 - Commit navigation with per-commit file and thread filtering
+- File tree and flat navigator modes, review status markers, risk sorting, and reviewed-file hiding
+- Blame side panel and file history popup from the diff
 - Inline notes on any diff line or visual selection
+- Multiple notes on the same line
 - Suggestion notes with GitHub-compatible `suggestion` blocks
-- Notes list panel with draft/staged/published workflow
-- Note persistence across sessions
-- Grouped thread queue for GitHub/GitLab and local notes
+- Notes list panel with draft/staged/resolved/published workflow, search, filters, and per-unit copy
+- Note, review-status, and UI preference persistence across sessions
+- Grouped thread queue for GitHub/GitLab, PR/MR summary context, stale threads, and local notes
 - Stale notes/threads surfaced separately when files disappear or remote review context goes stale
 - Reference other notes with `#<id>` syntax
-- Export notes to markdown
-- Copy all notes to the clipboard for LLM handoff
+- Export notes to markdown and copy rich handoff packets to the clipboard
 - Configurable keymaps
 - Colorblind-friendly color scheme (enabled by default)
 - `:checkhealth review`
 
 ## Requirements
 
-- Neovim >= 0.9.0
+- Neovim >= 0.10.0
 - `git`
-- `vim-fugitive` (https://github.com/tpope/vim-fugitive) for the embedded git status pane
-- `but` CLI (https://docs.gitbutler.com/cli-overview) for GitButler workspace support
-- `gh` CLI (https://cli.github.com) for GitHub PR features
-- `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features
+- `but` CLI (https://docs.gitbutler.com/cli-overview) for GitButler workspace support, optional
+- `gh` CLI (https://cli.github.com) for GitHub PR features, optional
+- `glab` CLI (https://gitlab.com/gitlab-org/cli) for GitLab MR features, optional
 - `plenary.nvim` for tests
 
 You only need `gh` or `glab` for the forge you use.
@@ -46,7 +47,6 @@ lazy.nvim:
 {
   "pesap/review.nvim",
   branch = "main", -- optional: track the main branch explicitly
-  dependencies = { "tpope/vim-fugitive" },
   config = function()
     require("review").setup()
   end,
@@ -62,8 +62,14 @@ lazy.nvim:
 :ReviewToggle        " open/close
 :ReviewHelp          " open review help
 :ReviewNotes         " open notes list from anywhere
-:ReviewComment       " add note at cursor, selection, or an explicit path/line target
+:ReviewComment       " add note at cursor, selection, or an explicit line/file/unit/discussion target
 :ReviewSuggestion    " add suggestion at cursor, selection, or an explicit path/line target
+:ReviewChangeBase main " re-diff the active local review against another base
+:ReviewMarkBaseline " mark current HEAD and current file state as a before-fix baseline
+:ReviewCompareBaseline " compare current work against the marked baseline
+:ReviewCompare      " open the Files-pane comparison explorer
+:ReviewBack         " return to the review that was open before compare
+:ReviewCompareUnit 2 " compare the selected/current review unit with another unit
 :ReviewExport        " export notes to markdown
 :ReviewClipboard     " copy all notes to the clipboard
 :ReviewClipboardLocal " copy only local notes to the clipboard
@@ -104,15 +110,27 @@ require("review").setup({
     prev_hunk = "[c",
     next_file = "]f",
     prev_file = "[f",
-    next_note_short = "n",
+    next_note_short = nil,
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",
-    toggle_stack = "T",
+    toggle_stack = "<Tab>",
     refresh = "R",
     focus_files = "f",
-    focus_git = "g",
-    focus_threads = "t",
+    focus_diff = "<leader>d",
+    focus_git = nil,        -- compatibility only; no git mutation pane is embedded
+    focus_threads = "T",
+    toggle_file_tree = "t",
+    sort_files = "o",
+    toggle_reviewed = "H",
+    filter_attention = "A",
+    change_base = "<leader>B",
+    mark_baseline = "M",
+    compare_baseline = "<leader>V",
+    compare_unit = "C",
+    commit_details = "K",
+    blame = "B",
+    file_history = "L",
     notes_list = "N",
     suggestion = "S",
     close = "q",
@@ -127,33 +145,39 @@ require("review").setup({
 ```vim
 :ReviewComment README.md:103
 :ReviewComment lua/review.lua 42 old
+:ReviewComment file lua/review.lua
+:ReviewComment unit
+:ReviewComment discussion
 :ReviewSuggestion lua/review.lua:57:new
 ```
 
 ## Keymaps
 
-Explorer: `<CR>` select, `N` notes list, `?` help, `q` close full review
+Navigator headers show the main areas: `[F] Files`, `[Diff]`, `[S] split/unified`, and `[T] Threads`.
+Use `<CR>` select, `s` return to the diff/split, `N` notes list, `u` copy selected review unit handoff, `?` help, `q` close full review.
 
 The left rail shows the active `Scope` explicitly:
 - `all` for the whole branch/range
 - `current · <sha>` for the current commit
 - `select · <sha>` while browsing commits directly from the rail
 
-In local worktree reviews opened without an explicit ref, review.nvim embeds a
-Fugitive status pane below the explorer in the left rail. Press `g` to jump to
-it. That pane uses your normal Fugitive keymaps and actions, but inherits
-review.nvim's window theme so it feels like part of the same layout.
+Use `<Tab>` to cycle scope rows. Scope rows are the commit/review-unit list;
+move the cursor onto one and press `C` to compare that unit against the
+currently selected unit. Press `K` on a scope row to inspect its commit
+details.
+
+When available, the navigator also shows the merge-base SHA used for the
+comparison.
+
+Implicit worktree reviews also show a `dirty` context row when staged,
+unstaged, or untracked files are present. Narrow rails compact that row to
+`S`, `U`, and `?` counts.
 
 When the current branch is `gitbutler/workspace` and `but -j status` works,
-`:Review` switches to GitButler mode. The file list is built from GitButler
-stack branches plus staged and unassigned changes, `T` cycles through each
+`:Review` switches to GitButler mode. The navigator is built from GitButler
+stack branches plus staged and unassigned changes, `<Tab>` cycles through each
 GitButler branch/unassigned scope, and `R` refreshes from the latest `but`
-workspace state. The lower-left pane becomes a read-only GitButler workspace
-summary instead of Fugitive. Stack mutations still belong in GitButler or the
-`but` CLI.
-
-If Fugitive is not installed, review.nvim shows a small themed placeholder pane
-instead of failing the whole review UI.
+workspace state. Stack mutations still belong in GitButler or the `but` CLI.
 
 Stale notes/threads are surfaced under `Stale` instead of silently disappearing.
 
@@ -166,29 +190,32 @@ Diff viewer:
 | `e`         | edit note                          |
 | `d`         | delete note                        |
 | `N`         | notes list                         |
+| `u`         | copy selected review unit handoff  |
 | `?`         | help                               |
 | `]c` / `[c` | next/prev hunk                     |
 | `]f` / `[f` | next/prev file                     |
 | `n`, `]n` / `[n` | next/prev note                 |
 | `s`         | toggle split                       |
-| `T`         | cycle scopes (GitButler: each branch/unassigned scope) |
+| `<Tab>`     | cycle scopes (GitButler: each branch/unassigned scope) |
 | `R`         | refresh review data                |
 | `f`         | focus the Files section            |
-| `g`         | focus the git status pane          |
-| `t`         | focus the Threads section          |
+| `<leader>d` | focus the Diff section            |
+| `T`         | focus the Threads section          |
+| `t`         | toggle navigator tree/flat layout  |
+| `o`         | cycle file sort                    |
+| `A`         | cycle attention filter (`changed` shows files changed since baseline) |
+| `H`         | hide/show reviewed files           |
+| `<leader>B` | change base ref                    |
+| `M`         | mark before-fix baseline           |
+| `<leader>V` | compare with marked baseline       |
+| `C`         | compare selected/current review units |
+| `K`         | open commit details                |
+| `B`         | open/close blame side panel        |
+| `L`         | open file history popup            |
 | `q`         | close full review                  |
 
-Git status pane:
-
-- In standard Git repos: `-` stages or unstages the entry under the cursor, `cc` creates a commit, and `A` stages all changes
-- In GitButler repos: review.nvim shows the current GitButler status output in a read-only pane
-- `q` closes the full review layout through review.nvim
-
-GitButler pane:
-
-- read-only summary of unassigned changes, applied stacks, branch status, review IDs, and upstream state
-- `g` focuses the pane
-- `q` closes the full review layout through review.nvim
+review.nvim does not embed a git status pane. Use `:Git`, GitButler, or the
+`but` CLI outside the review tab when you want to mutate the repository.
 
 Commands:
 
@@ -198,6 +225,12 @@ Commands:
 | `:ReviewComment` | add a note at the cursor/selection or an explicit target |
 | `:ReviewSuggestion` | add a suggestion at the cursor/selection or an explicit target |
 | `:ReviewRefresh` | refresh review data |
+| `:ReviewChangeBase [ref]` | re-diff the active local review against another base |
+| `:ReviewMarkBaseline` | mark current HEAD and file state as the before-fix review baseline |
+| `:ReviewCompareBaseline` | compare current work against the marked baseline |
+| `:ReviewCompare` | open the comparison explorer for branches, tags, commits, files, hunks, and GitButler targets |
+| `:ReviewBack` | return to the review that was open before compare |
+| `:ReviewCompareUnit [idx]` | compare selected/current review unit with another unit |
 | `:ReviewClipboard` | copy local notes, open threads, and discussion items to the clipboard |
 | `:ReviewClipboardLocal` | copy only local draft/staged notes to the clipboard |
 | `:ReviewClearLocal` | clear all local notes after confirmation |
@@ -212,7 +245,13 @@ Notes list:
 | `s`       | toggle draft/staged               |
 | `P`       | publish all staged notes          |
 | `y`       | copy local notes, open threads, and discussion items |
+| `u`       | copy a handoff packet for the selected note's review unit |
 | `Y`       | copy only local draft/staged notes |
+| `x`       | resolve/reopen a local note       |
+| `a`       | attach queued blame/history context to a local note |
+| `/`       | search notes                      |
+| `f`       | cycle note status filter          |
+| `c`       | clear notes filters               |
 | `C`       | clear all local notes             |
 | `gd`      | jump to referenced note (`#<id>`) |
 | `?`       | help                              |

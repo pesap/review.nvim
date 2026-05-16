@@ -1,6 +1,8 @@
 --- review.nvim — Minimal code review plugin for Neovim.
 --- Entry point: setup(), config, command dispatch.
 local M = {}
+local comments_request_seq = 0
+local local_refresh_seq = 0
 
 ---@class ReviewConfig
 local defaults = {
@@ -28,15 +30,27 @@ local defaults = {
     prev_hunk = "[c",
     next_file = "]f",
     prev_file = "[f",
-    next_note_short = "n",
+    next_note_short = nil,
     next_note = "]n",
     prev_note = "[n",
     toggle_split = "s",
-    toggle_stack = "T",
+    toggle_stack = "<Tab>",
     refresh = "R",
     focus_files = "f",
-    focus_git = "g",
+    focus_diff = "<BS>",
+    focus_git = nil,
     focus_threads = "t",
+    toggle_file_tree = nil,
+    sort_files = "o",
+    toggle_reviewed = "H",
+    filter_attention = "A",
+    change_base = "<leader>B",
+    mark_baseline = "M",
+    compare_baseline = "<leader>V",
+    compare_unit = "C",
+    commit_details = "K",
+    blame = "B",
+    file_history = "L",
     notes_list = "N",
     suggestion = "S",
     close = "q",
@@ -78,6 +92,7 @@ local function hydrate_cached_remote_bundle(base_ref)
   if bundle.comments and #bundle.comments > 0 then
     state.load_remote_comments(bundle.comments)
   end
+  state.set_remote_summary(bundle.summary)
 
   if state.get_ui() then
     ui.refresh()
@@ -187,6 +202,8 @@ function M._open_with_ref(ref, opts)
   state.create("local", ref or "HEAD", files, {
     repo_root = git.root(),
     branch = git.current_branch() or "HEAD",
+    head_ref = git.current_head and git.current_head() or nil,
+    merge_base_ref = ref and git.merge_base and git.merge_base(ref, "HEAD") or nil,
     requested_ref = opts.requested_ref,
     untracked_files = untracked_files,
     workspace_signature = git.workspace_signature and git.workspace_signature() or nil,
@@ -201,6 +218,143 @@ function M._open_with_ref(ref, opts)
 
   if opts.open_ui ~= false then
     ui.open()
+  end
+
+  return true
+end
+
+---@param left_ref string
+---@param right_ref string
+---@param opts table|nil
+---@return boolean
+function M._open_with_refs(left_ref, right_ref, opts)
+  opts = opts or {}
+  left_ref = vim.trim(tostring(left_ref or ""))
+  right_ref = vim.trim(tostring(right_ref or ""))
+  if left_ref == "" or right_ref == "" then
+    vim.notify("Choose both refs before comparing", vim.log.levels.WARN)
+    return false
+  end
+
+  local git = require("review.git")
+  local diff_mod = require("review.diff")
+  local state = require("review.state")
+  local ui = require("review.ui")
+
+  if not git.ref_exists(left_ref) then
+    vim.notify("Could not resolve left ref: " .. left_ref, vim.log.levels.WARN)
+    return false
+  end
+  if not git.ref_exists(right_ref) then
+    vim.notify("Could not resolve right ref: " .. right_ref, vim.log.levels.WARN)
+    return false
+  end
+
+  local diff_text, diff_err = git.diff_range(left_ref, right_ref)
+  if diff_text == "" then
+    vim.notify(
+      diff_err and ("Could not compare refs: " .. diff_err)
+        or ("No changes between " .. left_ref .. " and " .. right_ref),
+      diff_err and vim.log.levels.WARN or vim.log.levels.INFO
+    )
+    return false
+  end
+
+  local files = diff_mod.parse(diff_text)
+  if #files == 0 then
+    vim.notify("No files changed between " .. left_ref .. " and " .. right_ref, vim.log.levels.INFO)
+    return false
+  end
+
+  if opts.close_ui ~= false and state.get_ui() then
+    ui.close()
+  end
+
+  state.create("local", left_ref, files, {
+    repo_root = git.root(),
+    branch = git.current_branch() or "HEAD",
+    head_ref = right_ref,
+    left_ref = left_ref,
+    right_ref = right_ref,
+    comparison_key = table.concat({ "git", left_ref, right_ref }, "::"),
+    previous_review = opts.previous_review,
+    requested_ref = left_ref .. ".." .. right_ref,
+    merge_base_ref = git.merge_base and git.merge_base(left_ref, right_ref) or nil,
+    untracked_files = {},
+    workspace_signature = git.workspace_signature and git.workspace_signature() or nil,
+  })
+
+  local commits = git.log(left_ref, right_ref)
+  if #commits > 0 then
+    state.set_commits(commits)
+  end
+
+  if opts.open_ui ~= false then
+    ui.open()
+    if opts.focus then
+      vim.schedule(function()
+        require("review.ui").jump_to_file_location(opts.focus.file_path, opts.focus.line, opts.focus.side)
+      end)
+    end
+  end
+
+  return true
+end
+
+---@param target string
+---@param opts table|nil
+---@return boolean
+function M._open_gitbutler_target(target, opts)
+  opts = opts or {}
+  target = vim.trim(tostring(target or ""))
+
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+  local state = require("review.state")
+  local ui = require("review.ui")
+
+  local diff_target = target ~= "" and target or nil
+  local files, err = gitbutler.diff_files(diff_target, {
+    gitbutler = { kind = "cli", cli_id = target },
+  })
+  if not files then
+    vim.notify(
+      "Could not compare GitButler target " .. (target ~= "" and target or "workspace") .. ": " .. (err or "unknown"),
+      vim.log.levels.WARN
+    )
+    return false
+  end
+  if #files == 0 then
+    vim.notify("No changes for GitButler target " .. (target ~= "" and target or "workspace"), vim.log.levels.INFO)
+    return false
+  end
+
+  local status = gitbutler.status()
+  local base_ref = status and status.mergeBase and status.mergeBase.commitId or "gitbutler/workspace"
+  if opts.close_ui ~= false and state.get_ui() then
+    ui.close()
+  end
+
+  state.create("local", base_ref, files, {
+    vcs = "gitbutler",
+    repo_root = git.root(),
+    branch = git.current_branch() or "gitbutler/workspace",
+    left_ref = base_ref,
+    right_ref = "but:" .. (target ~= "" and target or "workspace"),
+    comparison_key = table.concat({ "gitbutler", base_ref, "but:" .. (target ~= "" and target or "workspace") }, "::"),
+    previous_review = opts.previous_review,
+    requested_ref = "but:" .. (target ~= "" and target or "workspace"),
+    untracked_files = {},
+    gitbutler = status,
+  })
+
+  if opts.open_ui ~= false then
+    ui.open()
+    if opts.focus then
+      vim.schedule(function()
+        require("review.ui").jump_to_file_location(opts.focus.file_path, opts.focus.line, opts.focus.side)
+      end)
+    end
   end
 
   return true
@@ -319,67 +473,214 @@ function M.reopen_session()
   M.open(requested_ref and { requested_ref } or {})
 end
 
----@param workspace_signature string|nil
+---@param s ReviewSession|nil
+---@return table|nil
+local function review_return_target(s)
+  if not s then
+    return nil
+  end
+  if s.previous_review then
+    return vim.deepcopy(s.previous_review)
+  end
+  if s.vcs == "gitbutler" then
+    local target = s.requested_ref and tostring(s.requested_ref):match("^but:(.+)$") or nil
+    if target and target ~= "workspace" then
+      return { kind = "gitbutler_target", target = target }
+    end
+    return { kind = "default" }
+  end
+  if s.requested_ref and s.requested_ref ~= "" and not (s.left_ref and s.right_ref) then
+    return { kind = "git_ref", ref = s.requested_ref }
+  end
+  return { kind = "default" }
+end
+
 ---@return boolean
-function M.refresh_local_session(workspace_signature)
+function M.back()
   local state = require("review.state")
   local s = state.get()
-  if not s or s.mode ~= "local" then
+  if not s then
+    vim.notify("No active review session", vim.log.levels.ERROR)
+    return false
+  end
+  if not s.previous_review then
+    vim.notify("No previous review to return to", vim.log.levels.INFO)
     return false
   end
 
-  local git = require("review.git")
-  local diff_mod = require("review.diff")
-  local gitbutler = require("review.gitbutler")
+  local target = s.previous_review
+  if target.kind == "git_ref" and target.ref and target.ref ~= "" then
+    M.open({ target.ref })
+  elseif target.kind == "gitbutler_target" then
+    M._open_gitbutler_target(target.target or "")
+  else
+    M.open({})
+  end
+  return true
+end
 
-  git.invalidate_cache()
-  gitbutler.invalidate_cache()
+M._review_return_target = review_return_target
 
+---@param ref string|nil
+---@return boolean|nil
+function M.change_base(ref)
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    vim.notify("No active review session", vim.log.levels.ERROR)
+    return false
+  end
+  if s.mode ~= "local" then
+    vim.notify("Base can only be changed for local review sessions", vim.log.levels.WARN)
+    return false
+  end
   if s.vcs == "gitbutler" then
-    local review_data = gitbutler.workspace_review()
-    if not review_data then
-      return false
-    end
-    s.files = review_data.files
-    s.untracked_files = review_data.untracked_files or {}
-    s.repo_root = git.root()
-    s.branch = git.current_branch() or "gitbutler/workspace"
-    s.gitbutler = review_data.metadata
-    s.commits = review_data.commits or {}
-    if s.current_commit_idx and not s.commits[s.current_commit_idx] then
-      s.current_commit_idx = nil
-      s.scope_mode = "all"
-    end
-    local active_files = state.active_files()
-    if #active_files == 0 then
-      s.current_file_idx = 1
-    else
-      s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
-    end
-    return true
+    vim.notify(
+      "GitButler reviews use the workspace merge base; reopen outside GitButler to pick a base",
+      vim.log.levels.WARN
+    )
+    return false
   end
 
-  local previous_commits = s.commits or {}
-  local previous_commit_by_sha = {}
-  for _, commit in ipairs(previous_commits) do
-    previous_commit_by_sha[commit.sha] = commit
+  ref = ref and vim.trim(ref) or nil
+  if not ref or ref == "" then
+    vim.ui.input({ prompt = "Review base: ", default = s.base_ref or "HEAD" }, function(input)
+      if input and vim.trim(input) ~= "" then
+        M.change_base(input)
+      end
+    end)
+    return nil
   end
-  local previous_commit_sha = s.current_commit_idx
-      and previous_commits[s.current_commit_idx]
-      and previous_commits[s.current_commit_idx].sha
-    or nil
 
+  local old_base = s.base_ref
+  local old_requested = s.requested_ref
+  local old_commit_idx = s.current_commit_idx
+  local old_scope_mode = s.scope_mode
+  local old_file_idx = s.current_file_idx
+
+  s.base_ref = ref
+  s.requested_ref = ref
+  s.current_commit_idx = nil
+  s.scope_mode = "all"
+  s.current_file_idx = 1
+
+  if not M.refresh_local_session() then
+    s.base_ref = old_base
+    s.requested_ref = old_requested
+    s.current_commit_idx = old_commit_idx
+    s.scope_mode = old_scope_mode
+    s.current_file_idx = old_file_idx
+    vim.notify("Could not change review base to " .. ref, vim.log.levels.WARN)
+    return false
+  end
+
+  require("review.storage").save(s)
+  local ui = require("review.ui")
+  if state.get_ui() then
+    ui.refresh()
+  end
+  vim.notify("Review base changed to " .. ref, vim.log.levels.INFO)
+  return true
+end
+
+---@return boolean
+function M.mark_baseline()
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    vim.notify("No active review session", vim.log.levels.ERROR)
+    return false
+  end
+  if s.mode ~= "local" or s.vcs == "gitbutler" then
+    vim.notify("Baselines are available for local git review sessions", vim.log.levels.WARN)
+    return false
+  end
+  local head = require("review.git").current_head()
+  if not head then
+    vim.notify("Could not resolve HEAD for review baseline", vim.log.levels.WARN)
+    return false
+  end
+  s.review_baseline_ref = head
+  state.mark_review_snapshot(head)
+  state.update_ui_prefs({ review_baseline_ref = head })
+  vim.notify("Review baseline marked at " .. head:sub(1, 12), vim.log.levels.INFO)
+  return true
+end
+
+---@return boolean
+function M.compare_baseline()
+  local state = require("review.state")
+  local s = state.get()
+  if not s then
+    vim.notify("No active review session", vim.log.levels.ERROR)
+    return false
+  end
+  local baseline = s.review_baseline_ref or state.get_ui_prefs().review_baseline_ref
+  if not baseline or baseline == "" then
+    vim.notify("No review baseline marked; run :ReviewMarkBaseline first", vim.log.levels.WARN)
+    return false
+  end
+  return M.change_base(baseline) == true
+end
+
+---@param s ReviewSession
+---@return string|nil
+local function session_diff_ref(s)
   local diff_ref = s.requested_ref
   if diff_ref == nil and s.base_ref ~= "HEAD" then
     diff_ref = s.base_ref
   end
+  return diff_ref
+end
 
-  local diff_text = git.diff(diff_ref)
-  s.files = diff_mod.parse(diff_text)
+---@param s ReviewSession
+---@return string|nil left_ref
+---@return string|nil right_ref
+local function session_diff_refs(s)
+  if s.left_ref and s.right_ref and not tostring(s.right_ref):match("^but:") then
+    return s.left_ref, s.right_ref
+  end
+  return nil, nil
+end
+
+---@param previous_commits table[]
+---@param previous_commit_sha string|nil
+---@return table<string, table>, string|nil
+local function previous_commit_state(previous_commits, previous_commit_sha)
+  local previous_commit_by_sha = {}
+  for _, commit in ipairs(previous_commits or {}) do
+    previous_commit_by_sha[commit.sha] = commit
+  end
+  return previous_commit_by_sha, previous_commit_sha
+end
+
+---@param s ReviewSession
+---@param diff_text string
+---@param commits table[]
+---@param workspace_signature string|nil
+---@param previous_commit_by_sha table<string, table>
+---@param previous_commit_sha string|nil
+---@param merge_base_ref string|nil
+local function apply_local_git_refresh(
+  s,
+  diff_text,
+  commits,
+  workspace_signature,
+  previous_commit_by_sha,
+  previous_commit_sha,
+  merge_base_ref
+)
+  local state = require("review.state")
+  local git = require("review.git")
+  local diff_mod = require("review.diff")
+
+  s.files = diff_mod.parse(diff_text or "")
   s.untracked_files = git.untracked_files()
   s.repo_root = git.root()
   s.branch = git.current_branch() or "HEAD"
-  s.commits = diff_ref and git.log(diff_ref) or {}
+  s.head_ref = git.current_head and git.current_head() or nil
+  s.merge_base_ref = merge_base_ref
+  s.commits = commits or {}
   s.workspace_signature = workspace_signature or (git.workspace_signature and git.workspace_signature() or nil)
 
   local remapped_commit_idx = nil
@@ -409,8 +710,278 @@ function M.refresh_local_session(workspace_signature)
   else
     s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
   end
+end
+
+---@param s ReviewSession
+---@return table<string, table>, string|nil
+local function snapshot_commit_state(s)
+  local previous_commits = s.commits or {}
+  local previous_commit_sha = s.current_commit_idx
+      and previous_commits[s.current_commit_idx]
+      and previous_commits[s.current_commit_idx].sha
+    or nil
+  return previous_commit_state(previous_commits, previous_commit_sha)
+end
+
+---@param s ReviewSession
+---@param review_data table
+local function apply_gitbutler_refresh(s, review_data)
+  local state = require("review.state")
+  local git = require("review.git")
+
+  s.files = review_data.files
+  s.untracked_files = review_data.untracked_files or {}
+  s.repo_root = git.root()
+  s.branch = git.current_branch() or "gitbutler/workspace"
+  s.gitbutler = review_data.metadata
+  s.commits = review_data.commits or {}
+  if s.current_commit_idx and not s.commits[s.current_commit_idx] then
+    s.current_commit_idx = nil
+    s.scope_mode = "all"
+  end
+  local active_files = state.active_files()
+  if #active_files == 0 then
+    s.current_file_idx = 1
+  else
+    s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
+  end
+end
+
+---@param ref string|nil
+---@return string|nil
+local function gitbutler_target_from_ref(ref)
+  local target = ref and tostring(ref):match("^but:(.+)$") or nil
+  if target == "workspace" then
+    return nil
+  end
+  return target
+end
+
+---@param s ReviewSession
+---@param files ReviewFile[]
+local function apply_gitbutler_target_refresh(s, files)
+  local state = require("review.state")
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+
+  s.files = files or {}
+  s.untracked_files = {}
+  s.repo_root = git.root()
+  s.branch = git.current_branch() or "gitbutler/workspace"
+  s.gitbutler = gitbutler.status() or s.gitbutler
+  s.commits = {}
+  s.current_commit_idx = nil
+  s.scope_mode = "all"
+
+  local active_files = state.active_files()
+  if #active_files == 0 then
+    s.current_file_idx = 1
+  else
+    s.current_file_idx = math.min(math.max(s.current_file_idx or 1, 1), #active_files)
+  end
+end
+
+---@param workspace_signature string|nil
+---@return boolean
+function M.refresh_local_session(workspace_signature)
+  local state = require("review.state")
+  local s = state.get()
+  if not s or s.mode ~= "local" then
+    return false
+  end
+
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+
+  git.invalidate_cache()
+  gitbutler.invalidate_cache()
+  local_refresh_seq = local_refresh_seq + 1
+
+  if s.vcs == "gitbutler" then
+    local target = gitbutler_target_from_ref(s.right_ref)
+    if target then
+      local files = gitbutler.diff_files(target, {
+        gitbutler = { kind = "cli", cli_id = target },
+      })
+      if not files then
+        return false
+      end
+      apply_gitbutler_target_refresh(s, files)
+      return true
+    end
+    local review_data = gitbutler.workspace_review()
+    if not review_data then
+      return false
+    end
+    apply_gitbutler_refresh(s, review_data)
+    return true
+  end
+
+  local previous_commit_by_sha, previous_commit_sha = snapshot_commit_state(s)
+  local left_ref, right_ref = session_diff_refs(s)
+  local diff_ref = session_diff_ref(s)
+  local diff_text = left_ref and git.diff_range(left_ref, right_ref) or git.diff(diff_ref)
+  local commits = left_ref and git.log(left_ref, right_ref) or (diff_ref and git.log(diff_ref) or {})
+  local merge_base_ref = left_ref and git.merge_base and git.merge_base(left_ref, right_ref)
+    or (diff_ref and git.merge_base and git.merge_base(diff_ref, "HEAD") or nil)
+  apply_local_git_refresh(
+    s,
+    diff_text,
+    commits,
+    workspace_signature,
+    previous_commit_by_sha,
+    previous_commit_sha,
+    merge_base_ref
+  )
 
   return true
+end
+
+---@param workspace_signature string|nil
+---@param callback fun(ok: boolean, err: string|nil)
+function M.refresh_local_session_async(workspace_signature, callback)
+  local state = require("review.state")
+  local s = state.get()
+  if not s or s.mode ~= "local" then
+    callback(false, "No active local review session")
+    return
+  end
+
+  local git = require("review.git")
+  local gitbutler = require("review.gitbutler")
+
+  git.invalidate_cache()
+  gitbutler.invalidate_cache()
+  local_refresh_seq = local_refresh_seq + 1
+  local request_token = local_refresh_seq
+  state.set_local_refresh_loading(true)
+
+  if s.vcs == "gitbutler" then
+    local target = gitbutler_target_from_ref(s.right_ref)
+    if target then
+      gitbutler.diff_files_async(target, {
+        gitbutler = { kind = "cli", cli_id = target },
+      }, function(files, err)
+        if request_token ~= local_refresh_seq or state.get() ~= s then
+          callback(false, "superseded")
+          return
+        end
+        if not files then
+          state.set_local_refresh_loading(false)
+          callback(false, err)
+          return
+        end
+        apply_gitbutler_target_refresh(s, files)
+        state.set_local_refresh_loading(false)
+        callback(true, nil)
+      end)
+      return
+    end
+    if type(gitbutler.workspace_review_async) ~= "function" then
+      local ok = M.refresh_local_session(workspace_signature)
+      state.set_local_refresh_loading(false)
+      callback(ok, nil)
+      return
+    end
+    gitbutler.workspace_review_async(function(review_data, err)
+      if request_token ~= local_refresh_seq or state.get() ~= s then
+        callback(false, "superseded")
+        return
+      end
+      if not review_data then
+        state.set_local_refresh_loading(false)
+        callback(false, err)
+        return
+      end
+      apply_gitbutler_refresh(s, review_data)
+      state.set_local_refresh_loading(false)
+      callback(true, nil)
+    end)
+    return
+  end
+
+  local previous_commit_by_sha, previous_commit_sha = snapshot_commit_state(s)
+  local left_ref, right_ref = session_diff_refs(s)
+  local diff_ref = session_diff_ref(s)
+  local diff_done = false
+  local log_done = diff_ref == nil and left_ref == nil
+  local merge_base_done = diff_ref == nil and left_ref == nil
+  local diff_text = ""
+  local commits = {}
+  local merge_base_ref = nil
+  local first_err = nil
+
+  local function finish()
+    if not diff_done or not log_done or not merge_base_done then
+      return
+    end
+    if request_token ~= local_refresh_seq or state.get() ~= s then
+      callback(false, "superseded")
+      return
+    end
+    apply_local_git_refresh(
+      s,
+      diff_text,
+      commits,
+      workspace_signature,
+      previous_commit_by_sha,
+      previous_commit_sha,
+      merge_base_ref
+    )
+    state.set_local_refresh_loading(false)
+    callback(true, first_err)
+  end
+
+  local function load_diff(callback)
+    if left_ref and git.diff_range_async then
+      git.diff_range_async(left_ref, right_ref, callback)
+    elseif git.diff_async then
+      git.diff_async(diff_ref, callback)
+    else
+      callback(left_ref and git.diff_range(left_ref, right_ref) or git.diff(diff_ref), nil)
+    end
+  end
+
+  local function load_log(callback)
+    if left_ref then
+      git.log_async(left_ref, right_ref, callback)
+    elseif not diff_ref then
+      callback({}, nil)
+    elseif git.log_async then
+      git.log_async(diff_ref, nil, callback)
+    else
+      callback(git.log(diff_ref), nil)
+    end
+  end
+
+  load_diff(function(result, err)
+    diff_text = result or ""
+    first_err = first_err or err
+    diff_done = true
+    finish()
+  end)
+
+  load_log(function(result, err)
+    commits = result or {}
+    first_err = first_err or err
+    log_done = true
+    finish()
+  end)
+  if (left_ref or diff_ref) and git.merge_base_async then
+    git.merge_base_async(left_ref or diff_ref, right_ref or "HEAD", function(result, err)
+      merge_base_ref = result
+      first_err = first_err or err
+      merge_base_done = true
+      finish()
+    end)
+  else
+    merge_base_ref = (left_ref or diff_ref)
+        and git.merge_base
+        and git.merge_base(left_ref or diff_ref, right_ref or "HEAD")
+      or nil
+    merge_base_done = true
+    finish()
+  end
 end
 
 --- Fetch (or re-fetch) remote PR comments and refresh the UI.
@@ -447,12 +1018,14 @@ function M.refresh_comments(opts)
   end
 
   state.set_comments_loading(true)
+  comments_request_seq = comments_request_seq + 1
+  local request_token = comments_request_seq
   refresh_ui()
 
   -- Fetch asynchronously
-  forge.fetch_comments_async(forge_info, function(comments, fetch_err)
+  forge.fetch_comments_async(forge_info, function(comments, fetch_err, summary)
     -- Verify session is still active
-    if not state.get() then
+    if not state.get() or request_token ~= comments_request_seq then
       return
     end
 
@@ -470,7 +1043,8 @@ function M.refresh_comments(opts)
     if comments and #comments > 0 then
       state.load_remote_comments(comments)
     end
-    require("review.storage").save_remote_bundle(forge_info, s.base_ref, comments or {})
+    state.set_remote_summary(summary)
+    require("review.storage").save_remote_bundle(forge_info, s.base_ref, comments or {}, summary)
 
     refresh_ui()
   end)
@@ -505,258 +1079,13 @@ function M.open_help()
   require("review.ui").open_help()
 end
 
----@param notes ReviewNote[]
----@return table<string, ReviewNote[]>
-local function notes_by_file(notes)
-  local grouped = {}
-  for _, note in ipairs(notes) do
-    local file_key = note.file_path or "(general)"
-    if not grouped[file_key] then
-      grouped[file_key] = {}
-    end
-    table.insert(grouped[file_key], note)
-  end
-  return grouped
+---@param idx string|number|nil
+function M.compare_unit(idx)
+  require("review.ui").open_unit_compare(idx and tonumber(idx) or nil)
 end
 
----@param note ReviewNote
----@return string
-local function note_sort_key(note)
-  local file_path = note.file_path or ""
-  local line = note.line or 0
-  local side = note.side or ""
-  return table.concat({ file_path, string.format("%08d", line), side, tostring(note.id or 0) }, "::")
-end
-
----@param notes ReviewNote[]
-local function sort_notes(notes)
-  table.sort(notes, function(a, b)
-    return note_sort_key(a) < note_sort_key(b)
-  end)
-end
-
----@param note ReviewNote
----@return string
-local function export_note_heading(note)
-  if note.is_general or not note.file_path then
-    return "PR/MR"
-  end
-
-  local line_ref = tostring(note.line or "?")
-  if note.end_line then
-    line_ref = line_ref .. "-" .. tostring(note.end_line)
-  end
-
-  local side = note.side and (" " .. note.side) or ""
-  return string.format("%s:%s%s", note.file_path, line_ref, side)
-end
-
----@param note ReviewNote
----@return string[]
-local function export_note_meta(note)
-  local meta = {}
-  table.insert(meta, note.status or "draft")
-  table.insert(meta, note.note_type == "suggestion" and "suggestion" or "comment")
-  if note.status == "remote" then
-    table.insert(meta, note.resolved and "resolved" or "open")
-  end
-  if note.gitbutler and (note.gitbutler.unpublished == true or note.gitbutler.kind == "unassigned") then
-    table.insert(meta, "unpublished")
-  end
-  if note.author then
-    table.insert(meta, "by @" .. note.author)
-  end
-  return meta
-end
-
----@param session ReviewSession
----@param notes ReviewNote[]
----@return string
-local function build_export_content(session, notes)
-  local git = require("review.git")
-  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
-  local title = session.forge_info
-      and string.format("# Review Notes for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
-    or "# Review Notes"
-
-  local lines = {
-    title,
-    "",
-    string.format("- branch: `%s`", branch),
-    string.format("- base: `%s`", session.base_ref or "HEAD"),
-    string.format("- total notes: %d", #notes),
-    "",
-  }
-
-  local groups = notes_by_file(notes)
-  local file_keys = {}
-  for file_key, _ in pairs(groups) do
-    table.insert(file_keys, file_key)
-  end
-  table.sort(file_keys)
-
-  for _, file_key in ipairs(file_keys) do
-    local file_notes = groups[file_key]
-    sort_notes(file_notes)
-    table.insert(lines, "## " .. file_key)
-    table.insert(lines, "")
-
-    for _, note in ipairs(file_notes) do
-      table.insert(lines, "### " .. export_note_heading(note))
-      table.insert(lines, "")
-      table.insert(lines, "- meta: " .. table.concat(export_note_meta(note), ", "))
-      if note.url then
-        table.insert(lines, "- url: " .. note.url)
-      end
-      table.insert(lines, "")
-      table.insert(lines, note.body)
-      table.insert(lines, "")
-
-      if note.status == "remote" and note.replies and #note.replies > 1 then
-        table.insert(lines, "Replies:")
-        table.insert(lines, "")
-        for i = 2, #note.replies do
-          local reply = note.replies[i]
-          local header = "- @" .. (reply.author or "unknown")
-          if reply.created_at then
-            local date = reply.created_at:match("^(%d%d%d%d%-%d%d%-%d%d)")
-            if date then
-              header = header .. " (" .. date .. ")"
-            end
-          end
-          table.insert(lines, header)
-          table.insert(lines, "  " .. (reply.body or ""))
-        end
-        table.insert(lines, "")
-      end
-    end
-  end
-
-  return table.concat(lines, "\n")
-end
-
----@param notes ReviewNote[]
----@return ReviewNote[], ReviewNote[], ReviewNote[]
-local function clipboard_note_sections(notes)
-  local local_notes = {}
-  local open_threads = {}
-  local discussion_notes = {}
-
-  for _, note in ipairs(notes) do
-    if note.is_general then
-      table.insert(discussion_notes, note)
-    elseif note.status == "draft" or note.status == "staged" then
-      table.insert(local_notes, note)
-    elseif note.status == "remote" and not note.resolved then
-      table.insert(open_threads, note)
-    end
-  end
-
-  sort_notes(local_notes)
-  sort_notes(open_threads)
-  sort_notes(discussion_notes)
-  return local_notes, open_threads, discussion_notes
-end
-
----@param lines string[]
----@param title string
----@param notes ReviewNote[]
-local function append_clipboard_section(lines, title, notes)
-  if #notes == 0 then
-    return
-  end
-
-  table.insert(lines, "## " .. title)
-  table.insert(lines, "")
-
-  for _, note in ipairs(notes) do
-    table.insert(lines, "### " .. export_note_heading(note))
-    table.insert(lines, "")
-    table.insert(lines, "- meta: " .. table.concat(export_note_meta(note), ", "))
-    if note.url then
-      table.insert(lines, "- url: " .. note.url)
-    end
-    table.insert(lines, "")
-    table.insert(lines, note.body)
-    table.insert(lines, "")
-
-    if note.status == "remote" and note.replies and #note.replies > 1 then
-      table.insert(lines, "Replies:")
-      table.insert(lines, "")
-      for i = 2, #note.replies do
-        local reply = note.replies[i]
-        local header = "- @" .. (reply.author or "unknown")
-        if reply.created_at then
-          local date = reply.created_at:match("^(%d%d%d%d%-%d%d%-%d%d)")
-          if date then
-            header = header .. " (" .. date .. ")"
-          end
-        end
-        table.insert(lines, header)
-        table.insert(lines, "  " .. (reply.body or ""))
-      end
-      table.insert(lines, "")
-    end
-  end
-end
-
----@param session ReviewSession
----@param notes ReviewNote[]
----@return string
-local function build_clipboard_content(session, notes)
-  local git = require("review.git")
-  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
-  local local_notes, open_threads, discussion_notes = clipboard_note_sections(notes)
-  local total = #local_notes + #open_threads + #discussion_notes
-  local title = session.forge_info
-      and string.format("# Review Queue for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
-    or "# Review Queue"
-
-  local lines = {
-    title,
-    "",
-    string.format("- branch: `%s`", branch),
-    string.format("- base: `%s`", session.base_ref or "HEAD"),
-    string.format("- included: %d", total),
-    "",
-  }
-
-  append_clipboard_section(lines, "Your Notes", local_notes)
-  append_clipboard_section(lines, "Open Threads", open_threads)
-  append_clipboard_section(lines, "Discussion", discussion_notes)
-
-  return table.concat(lines, "\n")
-end
-
----@param session ReviewSession
----@param notes ReviewNote[]
----@return string
-local function build_local_notes_clipboard_content(session, notes)
-  local git = require("review.git")
-  local branch = session.vcs == "gitbutler" and "GitButler workspace" or (git.current_branch() or "HEAD")
-  local local_notes = {}
-  for _, note in ipairs(notes) do
-    if note.status == "draft" or note.status == "staged" then
-      table.insert(local_notes, note)
-    end
-  end
-  sort_notes(local_notes)
-
-  local title = session.forge_info
-      and string.format("# Local Review Notes for %s #%d", session.forge_info.forge, session.forge_info.pr_number)
-    or "# Local Review Notes"
-
-  local lines = {
-    title,
-    "",
-    string.format("- branch: `%s`", branch),
-    string.format("- base: `%s`", session.base_ref or "HEAD"),
-    string.format("- included: %d", #local_notes),
-    "",
-  }
-
-  append_clipboard_section(lines, "Your Notes", local_notes)
-  return table.concat(lines, "\n")
+function M.compare()
+  require("review.compare").open()
 end
 
 ---@param content string
@@ -781,37 +1110,7 @@ end
 ---@param opts table|nil
 ---@return string|nil, string|nil
 function M.export_content(opts)
-  opts = opts or {}
-  local state = require("review.state")
-  local s = state.get()
-  if not s then
-    return nil, "No active review session"
-  end
-
-  local notes = state.get_notes()
-  if #notes == 0 then
-    return nil, "No notes to export"
-  end
-
-  if opts.local_only then
-    local has_local = false
-    for _, note in ipairs(notes) do
-      if note.status == "draft" or note.status == "staged" then
-        has_local = true
-        break
-      end
-    end
-    if not has_local then
-      return nil, "No local notes to export"
-    end
-    return build_local_notes_clipboard_content(s, notes), nil
-  end
-
-  if opts.clipboard then
-    return build_clipboard_content(s, notes), nil
-  end
-
-  return build_export_content(s, notes), nil
+  return require("review.handoff").export_content(opts)
 end
 
 function M.copy_notes_to_clipboard()
@@ -876,6 +1175,19 @@ local function parse_note_target(raw)
     return nil
   end
 
+  local normalized = raw:lower()
+  if normalized == "unit" or normalized == "scope" then
+    return {
+      target_kind = "unit",
+    }
+  end
+  if normalized == "discussion" or normalized == "general" or normalized == "pr" then
+    return {
+      target_kind = "discussion",
+      is_general = true,
+    }
+  end
+
   local file_path, line, side = raw:match("^(.*):(%d+):(old)$")
   if not file_path then
     file_path, line, side = raw:match("^(.*):(%d+):(new)$")
@@ -888,6 +1200,7 @@ local function parse_note_target(raw)
       file_path = file_path,
       line = tonumber(line),
       side = side or "new",
+      target_kind = "line",
     }
   end
 
@@ -900,6 +1213,17 @@ function M.resolve_note_target(args)
   args = args or {}
 
   if #args > 0 then
+    local first = tostring(args[1] or ""):lower()
+    if first == "file" then
+      if args[2] and args[2] ~= "" then
+        return {
+          file_path = args[2],
+          target_kind = "file",
+        }, nil
+      end
+      return nil, "Use :ReviewComment file path"
+    end
+
     local target = parse_note_target(args[1])
     if target then
       return target, nil
@@ -912,14 +1236,19 @@ function M.resolve_note_target(args)
           file_path = args[1],
           line = line,
           side = args[3] == "old" and "old" or "new",
+          target_kind = "line",
         },
           nil
       end
     end
 
-    return nil, "Use :ReviewComment path:line[:old|new] or :ReviewComment path line [old|new]"
+    return {
+      file_path = args[1],
+      target_kind = "file",
+    }, nil
   end
-  return nil, "No explicit note target provided"
+  return nil,
+    "Use :ReviewComment, :ReviewComment path[:line[:old|new]], :ReviewComment file path, :ReviewComment unit, or :ReviewComment discussion"
 end
 
 ---@param args string[]|nil

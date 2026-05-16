@@ -1,10 +1,14 @@
---- Centralized session state singleton.
+--- Centralized review session state.
 local M = {}
 
 local storage -- lazy-loaded to avoid circular require at parse time
 
 ---@type ReviewSession|nil
 local session = nil
+---@type table<number, ReviewSession>
+local sessions = {}
+---@type number|nil
+local active_tab = nil
 
 --- Auto-incrementing note ID counter.
 local next_note_id = 1
@@ -17,8 +21,57 @@ local function get_storage()
   return storage
 end
 
----@param file_path string
----@param line number
+---@return number
+local function current_tab()
+  local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
+  if ok and tab then
+    return tab
+  end
+  return 1
+end
+
+---@param tab number|nil
+---@return number
+local function session_key(tab)
+  return tab or current_tab()
+end
+
+---@param tab number|nil
+---@return ReviewSession|nil
+local function activate_session(tab)
+  local key = session_key(tab)
+  if sessions[key] then
+    active_tab = key
+    session = sessions[key]
+  elseif active_tab ~= key then
+    if session and not next(sessions) then
+      sessions[key] = session
+      active_tab = key
+      return session
+    end
+    local only_tab, only_session
+    for existing_tab, existing_session in pairs(sessions) do
+      if only_session then
+        only_session = nil
+        break
+      end
+      only_tab = existing_tab
+      only_session = existing_session
+    end
+    if only_session then
+      sessions[key] = only_session
+      active_tab = key
+      session = only_session
+    else
+      active_tab = key
+      session = nil
+    end
+  end
+  return session
+end
+
+---@param file_path string|nil
+---@param line number|nil
 ---@param side string
 ---@return string
 local function note_location_key(file_path, line, side)
@@ -49,9 +102,8 @@ local function rebuild_note_indexes()
 
       if note.line and note.side then
         local key = note_location_key(note.file_path, note.line, note.side)
-        if not session.note_index_by_location[key] then
-          session.note_index_by_location[key] = { note = note, idx = idx }
-        end
+        session.note_index_by_location[key] = session.note_index_by_location[key] or {}
+        table.insert(session.note_index_by_location[key], { note = note, idx = idx })
       end
     end
   end
@@ -72,6 +124,12 @@ end
 ---@field branch string|nil
 ---@field requested_ref string|nil
 ---@field base_ref string
+---@field left_ref string|nil
+---@field right_ref string|nil
+---@field comparison_key string|nil
+---@field previous_review table|nil
+---@field head_ref string|nil
+---@field merge_base_ref string|nil
 ---@field files ReviewFile[]             All files (full diff)
 ---@field untracked_files ReviewFile[]   Untracked working tree files
 ---@field commits ReviewCommit[]         Commits in the range
@@ -84,9 +142,16 @@ end
 ---@field notes ReviewNote[]
 ---@field draft_comments ReviewComment[]
 ---@field comments_loading boolean|nil
+---@field local_refresh_loading boolean|nil
+---@field remote_summary table|nil
 ---@field gitbutler table|nil
 ---@field ui_state ReviewUIState|nil
 ---@field workspace_signature string|nil
+---@field file_review_status table<string,string>
+---@field unit_review_status table<string,string>
+---@field review_snapshot_ref string|nil
+---@field review_snapshot_files table<string,string>|nil
+---@field ui_prefs table
 
 ---@class ReviewPR
 ---@field number number
@@ -126,6 +191,7 @@ end
 ---@field end_line number|nil
 ---@field side string|nil  "old"|"new", nil for PR-level comments
 ---@field is_general boolean|nil  true for PR-level comments
+---@field target_kind string|nil  "line"|"file"|"unit"|"discussion"
 ---@field body string
 ---@field note_type string  "comment"|"suggestion"
 ---@field status string  "draft"|"staged"|"remote"
@@ -165,8 +231,6 @@ end
 ---@field explorer_win number|nil
 ---@field diff_buf number|nil
 ---@field diff_win number|nil
----@field git_buf number|nil
----@field git_win number|nil
 ---@field split_buf number|nil
 ---@field split_win number|nil
 ---@field tab number|nil
@@ -183,6 +247,7 @@ end
 function M.create(mode, base_ref, files, opts)
   opts = opts or {}
   local git = require("review.git")
+  local key = session_key(opts.tab)
   session = {
     mode = mode,
     vcs = opts.vcs or "git",
@@ -190,6 +255,12 @@ function M.create(mode, base_ref, files, opts)
     branch = opts.branch or git.current_branch() or "HEAD",
     requested_ref = opts.requested_ref,
     base_ref = base_ref,
+    left_ref = opts.left_ref,
+    right_ref = opts.right_ref,
+    comparison_key = opts.comparison_key,
+    previous_review = opts.previous_review,
+    head_ref = opts.head_ref,
+    merge_base_ref = opts.merge_base_ref,
     files = files,
     untracked_files = opts.untracked_files or {},
     commits = {},
@@ -202,9 +273,16 @@ function M.create(mode, base_ref, files, opts)
     notes = {},
     draft_comments = {},
     comments_loading = false,
+    local_refresh_loading = false,
+    remote_summary = nil,
     forge_info = nil,
     gitbutler = opts.gitbutler,
     ui_state = nil,
+    file_review_status = {},
+    unit_review_status = {},
+    review_snapshot_ref = nil,
+    review_snapshot_files = nil,
+    ui_prefs = {},
     workspace_signature = opts.workspace_signature
       or (mode == "local" and git.workspace_signature and git.workspace_signature() or nil),
   }
@@ -219,24 +297,86 @@ function M.create(mode, base_ref, files, opts)
       end
     end
   end
+  if get_storage().load_workspace_state then
+    local workspace_state = get_storage().load_workspace_state()
+    if workspace_state then
+      session.file_review_status = workspace_state.file_review_status or {}
+      session.unit_review_status = workspace_state.unit_review_status or {}
+      session.review_snapshot_ref = workspace_state.review_snapshot_ref
+      session.review_snapshot_files = workspace_state.review_snapshot_files
+      session.ui_prefs = workspace_state.ui_prefs or {}
+    end
+  end
 
   rebuild_note_indexes()
+  sessions[key] = session
+  active_tab = key
 
   return session
+end
+
+---@return string|nil
+function M.comparison_key()
+  if not session then
+    return nil
+  end
+  if session.comparison_key then
+    return session.comparison_key
+  end
+  if session.left_ref and session.right_ref then
+    return table.concat({ session.vcs or "git", session.left_ref, session.right_ref }, "::")
+  end
+  return nil
 end
 
 --- Get the current session.
+---@param tab number|nil
 ---@return ReviewSession|nil
-function M.get()
-  return session
+function M.get(tab)
+  if tab then
+    return sessions[tab]
+  end
+  return activate_session(current_tab())
 end
 
 --- Destroy the current session.
-function M.destroy()
-  if session then
-    get_storage().save(session)
+---@param tab number|nil
+function M.destroy(tab)
+  local key = tab or active_tab or current_tab()
+  local target = sessions[key] or session
+  if target then
+    get_storage().save(target)
   end
-  session = nil
+  sessions[key] = nil
+  if session == target then
+    session = nil
+    active_tab = nil
+  end
+end
+
+---@param tab number|nil
+---@return ReviewSession|nil
+function M.activate(tab)
+  return activate_session(tab)
+end
+
+---@param tab number
+---@param target ReviewSession|nil
+---@return ReviewSession|nil
+function M.bind(tab, target)
+  target = target or session
+  if not tab or not target then
+    return nil
+  end
+  sessions[tab] = target
+  active_tab = tab
+  session = target
+  return target
+end
+
+---@return table<number, ReviewSession>
+function M.sessions()
+  return sessions
 end
 
 --- Store forge info for the session (avoids repeated shell calls).
@@ -268,6 +408,30 @@ function M.comments_loading()
   return session and session.comments_loading == true or false
 end
 
+---@param loading boolean
+function M.set_local_refresh_loading(loading)
+  if session then
+    session.local_refresh_loading = loading and true or false
+  end
+end
+
+---@return boolean
+function M.local_refresh_loading()
+  return session and session.local_refresh_loading == true or false
+end
+
+---@param summary table|nil
+function M.set_remote_summary(summary)
+  if session then
+    session.remote_summary = summary
+  end
+end
+
+---@return table|nil
+function M.remote_summary()
+  return session and session.remote_summary or nil
+end
+
 --- Set the current file index.
 ---@param idx number
 function M.set_file(idx)
@@ -297,12 +461,17 @@ function M.scope_mode()
 end
 
 ---@param mode "all"|"current_commit"|"select_commit"
-function M.set_scope_mode(mode)
+---@param opts table|nil
+function M.set_scope_mode(mode, opts)
   if not session then
     return
   end
+  opts = opts or {}
   session.scope_mode = mode
   if mode == "all" then
+    session.current_commit_idx = nil
+    session.current_file_idx = 1
+  elseif mode == "select_commit" and opts.keep_all_files then
     session.current_commit_idx = nil
     session.current_file_idx = 1
   elseif not session.current_commit_idx and #session.commits > 0 then
@@ -507,10 +676,12 @@ end
 ---@param end_line number|nil
 ---@param side string|nil  "old"|"new", defaults to "new"
 ---@param note_type string|nil  "comment"|"suggestion", defaults to "comment"
-function M.add_note(file_path, line, body, end_line, side, note_type)
+---@param opts table|nil
+function M.add_note(file_path, line, body, end_line, side, note_type, opts)
   if not session then
     return
   end
+  opts = opts or {}
   local commit = M.uses_commit_scope() and M.current_commit() or nil
   local note = {
     id = next_note_id,
@@ -518,14 +689,34 @@ function M.add_note(file_path, line, body, end_line, side, note_type)
     line = line,
     end_line = end_line,
     side = side or "new",
+    is_general = opts.is_general or false,
+    target_kind = opts.target_kind
+      or (opts.is_general and "discussion")
+      or (file_path and line and "line")
+      or (file_path and "file")
+      or "unit",
     body = body,
     note_type = note_type or "comment",
     status = "draft",
     commit_sha = commit and commit.sha or nil,
     commit_short_sha = commit and commit.short_sha or nil,
     gitbutler = commit and commit.gitbutler and vim.deepcopy(commit.gitbutler) or nil,
+    blame_context = opts.blame_context,
+    log_context = opts.log_context,
+    requested_action = opts.requested_action or opts.action,
+    validation = opts.validation,
     url = nil,
   }
+  local comparison_key = M.comparison_key()
+  if comparison_key then
+    note.comparison_key = comparison_key
+    note.comparison = {
+      vcs = session.vcs or "git",
+      left_ref = session.left_ref or session.base_ref,
+      right_ref = session.right_ref or session.head_ref,
+      requested_ref = session.requested_ref,
+    }
+  end
   next_note_id = next_note_id + 1
   table.insert(session.notes, note)
   rebuild_note_indexes()
@@ -579,10 +770,15 @@ function M.note_is_stale(note)
   if not session then
     return false
   end
-  if session.vcs == "gitbutler" and not has_gitbutler_scope(note) then
+  local active_comparison_key = M.comparison_key()
+  if note.comparison_key and active_comparison_key and note.comparison_key ~= active_comparison_key then
     return true
   end
-  if note.commit_sha and not M.has_commit(note.commit_sha) then
+  local gitbutler_scope_matches = session.vcs == "gitbutler" and has_gitbutler_scope(note)
+  if session.vcs == "gitbutler" and not gitbutler_scope_matches then
+    return true
+  end
+  if note.commit_sha and not M.has_commit(note.commit_sha) and not gitbutler_scope_matches then
     return true
   end
   if note.status == "remote" then
@@ -613,7 +809,27 @@ function M.note_in_scope(note)
   end
 
   local commit = M.current_commit()
-  return commit ~= nil and note.commit_sha == commit.sha
+  if not commit then
+    return false
+  end
+
+  if session.vcs == "gitbutler" and note.gitbutler and commit.gitbutler then
+    local note_gb = note.gitbutler
+    local commit_gb = commit.gitbutler
+    if note_gb.kind == commit_gb.kind then
+      if note_gb.kind == "unassigned" then
+        return true
+      end
+      if note_gb.branch_cli_id and note_gb.branch_cli_id == commit_gb.branch_cli_id then
+        return true
+      end
+      if note_gb.branch_name and note_gb.branch_name == commit_gb.branch_name then
+        return true
+      end
+    end
+  end
+
+  return note.commit_sha == commit.sha
 end
 
 ---@return ReviewNote[], ReviewNote[]
@@ -640,6 +856,15 @@ function M.remove_note(idx)
     table.remove(session.notes, idx)
     rebuild_note_indexes()
     get_storage().save(session)
+  end
+end
+
+--- Remove a note by ID.
+---@param note_id number
+function M.remove_note_by_id(note_id)
+  local _, idx = M.get_note_by_id(note_id)
+  if idx then
+    M.remove_note(idx)
   end
 end
 
@@ -773,6 +998,22 @@ function M.toggle_staged(note_id)
   end
 end
 
+--- Toggle a local note between unresolved and resolved.
+---@param note_id number
+function M.toggle_resolved(note_id)
+  if not session then
+    return
+  end
+  for _, note in ipairs(session.notes) do
+    if note.id == note_id and note.status ~= "remote" then
+      note.resolved = not note.resolved
+      rebuild_note_indexes()
+      get_storage().save(session)
+      return
+    end
+  end
+end
+
 --- Publish staged notes: remove successfully posted ones from the session.
 --- They will appear as remote comments on the next session open.
 ---@param url_map table|nil  Map of note_id -> url string
@@ -811,6 +1052,33 @@ function M.get_note_by_id(note_id)
   return entry and entry.note or nil, entry and entry.idx or nil
 end
 
+---@param note_id number
+---@param context table
+---@return boolean
+function M.attach_context_to_note(note_id, context)
+  if not session or type(context) ~= "table" then
+    return false
+  end
+  local note = M.get_note_by_id(note_id)
+  if not note or note.status == "remote" then
+    return false
+  end
+  local changed = false
+  if context.blame_context and context.blame_context ~= "" then
+    note.blame_context = context.blame_context
+    changed = true
+  end
+  if context.log_context and context.log_context ~= "" then
+    note.log_context = context.log_context
+    changed = true
+  end
+  if changed then
+    rebuild_note_indexes()
+    get_storage().save(session)
+  end
+  return changed
+end
+
 --- Find a note by file path, line, and side.
 ---@param file_path string
 ---@param line number
@@ -820,8 +1088,152 @@ function M.find_note_at(file_path, line, side)
   if not session then
     return nil, nil
   end
-  local entry = session.note_index_by_location[note_location_key(file_path, line, side)]
+  local entries = session.note_index_by_location[note_location_key(file_path, line, side)]
+  local entry = entries and entries[1] or nil
   return entry and entry.note or nil, entry and entry.idx or nil
+end
+
+--- Find all notes at file path, line, and side.
+---@param file_path string
+---@param line number
+---@param side string
+---@return table[]
+function M.find_notes_at(file_path, line, side)
+  if not session then
+    return {}
+  end
+  return session.note_index_by_location[note_location_key(file_path, line, side)] or {}
+end
+
+---@param file_path string
+---@param status string
+function M.set_file_review_status(file_path, status)
+  if not session or not file_path then
+    return
+  end
+  session.file_review_status = session.file_review_status or {}
+  session.file_review_status[file_path] = status
+  get_storage().save(session)
+end
+
+---@param file_path string
+---@return string
+function M.get_file_review_status(file_path)
+  if not session or not file_path then
+    return "unreviewed"
+  end
+  session.file_review_status = session.file_review_status or {}
+  return session.file_review_status[file_path] or "unreviewed"
+end
+
+---@param unit_id string
+---@param status string
+function M.set_unit_review_status(unit_id, status)
+  if not session or not unit_id then
+    return
+  end
+  session.unit_review_status = session.unit_review_status or {}
+  session.unit_review_status[unit_id] = status
+  get_storage().save(session)
+end
+
+---@param unit_id string
+---@return string
+function M.get_unit_review_status(unit_id)
+  if not session or not unit_id then
+    return "unreviewed"
+  end
+  session.unit_review_status = session.unit_review_status or {}
+  return session.unit_review_status[unit_id] or "unreviewed"
+end
+
+---@param file ReviewFile
+---@return string
+local function file_review_signature(file)
+  local parts = {
+    path = file.path or "",
+    status = file.status or "",
+    hunks = {},
+  }
+  for _, hunk in ipairs(file.hunks or {}) do
+    local hunk_parts = {
+      header = hunk.header or "",
+      old_start = hunk.old_start or 0,
+      old_count = hunk.old_count or 0,
+      new_start = hunk.new_start or 0,
+      new_count = hunk.new_count or 0,
+      lines = {},
+    }
+    for _, line in ipairs(hunk.lines or {}) do
+      table.insert(hunk_parts.lines, {
+        type = line.type or "",
+        text = line.text or "",
+        old_lnum = line.old_lnum or 0,
+        new_lnum = line.new_lnum or 0,
+      })
+    end
+    table.insert(parts.hunks, hunk_parts)
+  end
+  return vim.fn.sha256(vim.fn.json_encode(parts))
+end
+
+---@param files ReviewFile[]
+---@return table<string,string>
+local function snapshot_files(files)
+  local snapshot = {}
+  for _, file in ipairs(files or {}) do
+    if file.path then
+      snapshot[file.path] = file_review_signature(file)
+    end
+  end
+  return snapshot
+end
+
+---@param ref string
+function M.mark_review_snapshot(ref)
+  if not session then
+    return
+  end
+  session.review_snapshot_ref = ref
+  session.review_snapshot_files = snapshot_files(M.all_files())
+  get_storage().save(session)
+end
+
+---@param file ReviewFile
+---@return "none"|"new"|"changed"|"unchanged"
+function M.review_snapshot_file_state(file)
+  if not session or not file or not file.path or not session.review_snapshot_files then
+    return "none"
+  end
+  local previous = session.review_snapshot_files[file.path]
+  if not previous then
+    return "new"
+  end
+  if previous ~= file_review_signature(file) then
+    return "changed"
+  end
+  return "unchanged"
+end
+
+---@return table
+function M.get_ui_prefs()
+  if not session then
+    return {}
+  end
+  session.ui_prefs = session.ui_prefs or {}
+  return session.ui_prefs
+end
+
+---@param prefs table
+function M.update_ui_prefs(prefs)
+  if not session or type(prefs) ~= "table" then
+    return
+  end
+  session.ui_prefs = session.ui_prefs or {}
+  for key, value in pairs(prefs) do
+    session.ui_prefs[key] = value
+  end
+  get_storage().save(session)
 end
 
 --- Update a note's body by index and persist.

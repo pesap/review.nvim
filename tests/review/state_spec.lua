@@ -5,6 +5,20 @@ describe("review.state note indexes", function()
   local original_storage_module
   local original_git_module
 
+  local function sample_hunk(old_line, new_line)
+    return {
+      header = string.format("@@ -%d,1 +%d,1 @@", old_line, new_line),
+      old_start = old_line,
+      old_count = 1,
+      new_start = new_line,
+      new_count = 1,
+      lines = {
+        { type = "del", text = "before", old_lnum = old_line },
+        { type = "add", text = "after", new_lnum = new_line },
+      },
+    }
+  end
+
   before_each(function()
     original_state_module = package.loaded["review.state"]
     original_storage_module = package.loaded["review.storage"]
@@ -63,6 +77,38 @@ describe("review.state note indexes", function()
     assert.are.equal(1, by_id_idx)
   end)
 
+  it("keeps independent sessions keyed by tab", function()
+    state.create("local", "main", {
+      { path = "lua/one.lua", status = "M", hunks = {} },
+    }, {
+      tab = 101,
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/one",
+    })
+    state.add_note("lua/one.lua", 1, "first tab", nil, "new")
+
+    state.create("local", "develop", {
+      { path = "lua/two.lua", status = "M", hunks = {} },
+    }, {
+      tab = 202,
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/two",
+    })
+    state.add_note("lua/two.lua", 2, "second tab", nil, "new")
+
+    assert.are.equal("main", state.get(101).base_ref)
+    assert.are.equal("develop", state.get(202).base_ref)
+    assert.are.equal("second tab", state.get_notes("lua/two.lua")[1].body)
+
+    state.activate(101)
+    assert.are.equal("first tab", state.get_notes("lua/one.lua")[1].body)
+    assert.is_nil(state.get_notes("lua/two.lua")[1])
+
+    state.destroy(101)
+    assert.is_nil(state.get(101))
+    assert.is_not_nil(state.get(202))
+  end)
+
   it("rebuilds indexes after note removal", function()
     state.add_note("lua/review.lua", 12, "first", nil, "new")
     state.add_note("lua/review.lua", 18, "second", nil, "old")
@@ -76,6 +122,114 @@ describe("review.state note indexes", function()
     assert.are.equal("second", note.body)
     assert.are.equal(1, idx)
     assert.are.equal(1, #state.get_notes("lua/review.lua"))
+  end)
+
+  it("indexes multiple notes at the same location", function()
+    state.add_note("lua/review.lua", 12, "first", nil, "new")
+    state.add_note("lua/review.lua", 12, "second", nil, "new")
+
+    local entries = state.find_notes_at("lua/review.lua", 12, "new")
+    assert.are.equal(2, #entries)
+    assert.are.equal("first", entries[1].note.body)
+    assert.are.equal("second", entries[2].note.body)
+
+    local note = state.find_note_at("lua/review.lua", 12, "new")
+    assert.are.equal("first", note.body)
+  end)
+
+  it("tracks file review statuses", function()
+    assert.are.equal("unreviewed", state.get_file_review_status("lua/review.lua"))
+    state.set_file_review_status("lua/review.lua", "needs-agent")
+    assert.are.equal("needs-agent", state.get_file_review_status("lua/review.lua"))
+  end)
+
+  it("tracks review unit statuses", function()
+    assert.are.equal("unreviewed", state.get_unit_review_status("workspace"))
+    state.set_unit_review_status("workspace", "blocked")
+    assert.are.equal("blocked", state.get_unit_review_status("workspace"))
+  end)
+
+  it("tracks review snapshots for changed-since-baseline files", function()
+    state.get().files = {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(12, 12) } },
+      { path = "lua/new.lua", status = "A", hunks = { sample_hunk(1, 1) } },
+    }
+
+    state.mark_review_snapshot("before")
+    assert.are.equal("unchanged", state.review_snapshot_file_state(state.get().files[1]))
+
+    state.get().files = {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(18, 18) } },
+      { path = "lua/added.lua", status = "A", hunks = { sample_hunk(1, 1) } },
+    }
+
+    assert.are.equal("changed", state.review_snapshot_file_state(state.get().files[1]))
+    assert.are.equal("new", state.review_snapshot_file_state(state.get().files[2]))
+  end)
+
+  it("tracks local refresh loading state", function()
+    assert.is_false(state.local_refresh_loading())
+    state.set_local_refresh_loading(true)
+    assert.is_true(state.local_refresh_loading())
+    state.set_local_refresh_loading(false)
+    assert.is_false(state.local_refresh_loading())
+  end)
+
+  it("resolves and reopens local notes without deleting them", function()
+    state.add_note("lua/review.lua", 12, "first", nil, "new")
+    local note = state.get_notes("lua/review.lua")[1]
+
+    state.toggle_resolved(note.id)
+    assert.is_true(state.get_notes("lua/review.lua")[1].resolved)
+
+    state.toggle_resolved(note.id)
+    assert.is_false(state.get_notes("lua/review.lua")[1].resolved)
+    assert.are.equal(1, #state.get_notes("lua/review.lua"))
+  end)
+
+  it("stores attached blame and log context on local notes", function()
+    state.add_note("lua/review.lua", 12, "draft", nil, "new", "comment", {
+      blame_context = "abc12345 reviewer old line",
+      log_context = "def67890 2026-05-15 reviewer fix context",
+    })
+
+    local note = state.get_notes("lua/review.lua")[1]
+    assert.are.equal("abc12345 reviewer old line", note.blame_context)
+    assert.are.equal("def67890 2026-05-15 reviewer fix context", note.log_context)
+  end)
+
+  it("tags local notes with the active comparison pair", function()
+    state.create("local", "v1.0.0", {
+      { path = "lua/review.lua", status = "M", hunks = { sample_hunk(10, 10) } },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "feature/state-spec",
+      left_ref = "v1.0.0",
+      right_ref = "v1.1.0",
+      requested_ref = "v1.0.0..v1.1.0",
+      comparison_key = "git::v1.0.0::v1.1.0",
+    })
+
+    state.add_note("lua/review.lua", 12, "compare note", nil, "new")
+
+    local note = state.get_notes("lua/review.lua")[1]
+    assert.are.equal("git::v1.0.0::v1.1.0", note.comparison_key)
+    assert.are.equal("v1.0.0", note.comparison.left_ref)
+    assert.are.equal("v1.1.0", note.comparison.right_ref)
+  end)
+
+  it("attaches blame and log context to an existing local note", function()
+    state.add_note("lua/review.lua", 12, "draft", nil, "new")
+    local note = state.get_notes("lua/review.lua")[1]
+
+    assert.is_true(state.attach_context_to_note(note.id, {
+      blame_context = "abc12345 reviewer old line",
+      log_context = "def67890 2026-05-15 reviewer fix context",
+    }))
+
+    local updated = state.get_notes("lua/review.lua")[1]
+    assert.are.equal("abc12345 reviewer old line", updated.blame_context)
+    assert.are.equal("def67890 2026-05-15 reviewer fix context", updated.log_context)
   end)
 
   it("clears all local notes while preserving remote comments", function()
@@ -159,6 +313,50 @@ describe("review.state note indexes", function()
     assert.are.equal("commit scoped", scoped[1].body)
     assert.are.equal(1, #stale_notes)
     assert.are.equal("stale", stale_notes[1].body)
+  end)
+
+  it("keeps GitButler branch-scoped notes visible when branch commit shas change", function()
+    state.create("local", "main", {
+      { path = "lua/review.lua", status = "M", hunks = {} },
+    }, {
+      repo_root = "/tmp/review-nvim",
+      branch = "gitbutler/workspace",
+      requested_ref = nil,
+      untracked_files = {},
+      vcs = "gitbutler",
+    })
+    state.set_commits({
+      {
+        sha = "oldsha123456",
+        short_sha = "oldsha1",
+        message = "feature/a",
+        author = "psanchez",
+        files = { { path = "lua/review.lua", status = "M", hunks = {} } },
+        gitbutler = { kind = "branch", branch_name = "feature/a", branch_cli_id = "at" },
+      },
+    })
+    state.set_scope_mode("current_commit")
+    state.set_commit(1)
+
+    state.add_note("lua/review.lua", 12, "branch scoped", nil, "new")
+
+    state.set_commits({
+      {
+        sha = "newsha654321",
+        short_sha = "newsha6",
+        message = "feature/a",
+        author = "psanchez",
+        files = { { path = "lua/review.lua", status = "M", hunks = {} } },
+        gitbutler = { kind = "branch", branch_name = "feature/a", branch_cli_id = "at" },
+      },
+    })
+    state.set_commit(1)
+
+    local scoped, stale_notes = state.scoped_notes()
+
+    assert.are.equal(1, #scoped)
+    assert.are.equal("branch scoped", scoped[1].body)
+    assert.are.equal(0, #stale_notes)
   end)
 
   it("marks remote threads stale when the review context is outdated", function()
